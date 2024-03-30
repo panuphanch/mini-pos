@@ -4,31 +4,31 @@
     <title>Thermal Receipt Printer</title>
     <script type="text/javascript" src="/eel.js"></script>
 </head>
-<body>
+<body onload="loadProductData()">
     <h1>Enter Receipt Details</h1>
     <input type="text" class="customer" placeholder="Customer name" />
-    <div id="items_container">
-        <div class="item_row">
-            <input type="text" class="item" placeholder="Item 1" />
-            <input type="number" class="quantity" placeholder="Qty" min="1" value="1">
-            <input type="number" class="price" placeholder="Price" />
-        </div> 
+    <br /><br />
+    <select id="productSelect">
+        <option value="">เลือกเมนู</option> 
+    </select>
+    <br />
+    <div id="items_container" style="margin-top: 10px; margin-bottom: 10px;">
     </div>
     <button onclick="addItemRow()">Add Item</button>
     <button onclick="submitReceipt()">Print Receipt</button>
 
     <script>
-        let itemCount = 1;        
+        let itemCount = 1;
 
-        function addItemRow() {
+        function addItemRow(item = "", price = "") {
             itemCount++;
             let container = document.getElementById('items_container');
             let newRow = document.createElement('div');
             newRow.classList.add('item_row');
             newRow.innerHTML = `
-                <input type="text" class="item" placeholder="Item ${itemCount}">
+                <input type="text" class="item" placeholder="Item ${itemCount}" value="${item}">
                 <input type="number" class="quantity" placeholder="Qty" min="1" value="1">
-                <input type="number" class="price" placeholder="Price">
+                <input type="number" class="price" placeholder="Price" value="${parseInt(price, 10)}">
                 <button onclick="removeItemRow(this)">Remove</button>
             `;
             container.appendChild(newRow);
@@ -41,12 +41,37 @@
         async function submitReceipt() {
             let customerElements = document.querySelector('.customer');
             let itemElements = document.querySelectorAll('.item');
+            let quantityElements = document.querySelectorAll('.quantity');
             let priceElements = document.querySelectorAll('.price');
             let items = Array.from(itemElements).map(el => el.value);
+            let quantities = Array.from(quantityElements).map(el => el.value);
             let prices = Array.from(priceElements).map(el => el.value);
-            console.log(customerElements.value);
-            await eel.print_receipt(items, prices, customerElements.value); 
+            await eel.print_receipt(items, quantities, prices, customerElements.value); 
         }
+
+        async function loadProductData() {
+            let productList = await eel.load_products()();
+
+            const productSelect = document.getElementById('productSelect');
+            productList.forEach(line => {
+                const [item, price] = line;
+                const option = document.createElement('option');
+                option.value = item;
+                option.textContent = item;
+                option.dataset.price = price;
+                productSelect.appendChild(option);
+            });
+        }
+
+        const productSelect = document.getElementById('productSelect');
+        productSelect.addEventListener('change', function() {
+            const selectedItem = this.value;
+            const selectedPrice = this.options[this.selectedIndex].dataset.price;
+
+            if (selectedItem) { 
+                addItemRow(selectedItem, selectedPrice);
+            }
+        });
     </script>
 </body>
 </html>
