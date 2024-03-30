@@ -1,0 +1,2 @@
+eel
+python-escpos

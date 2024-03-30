@@ -1,0 +1,52 @@
+<!DOCTYPE html>
+<html>
+<head>
+    <title>Thermal Receipt Printer</title>
+    <script type="text/javascript" src="/eel.js"></script>
+</head>
+<body>
+    <h1>Enter Receipt Details</h1>
+    <input type="text" class="customer" placeholder="Customer name" />
+    <div id="items_container">
+        <div class="item_row">
+            <input type="text" class="item" placeholder="Item 1" />
+            <input type="number" class="quantity" placeholder="Qty" min="1" value="1">
+            <input type="number" class="price" placeholder="Price" />
+        </div> 
+    </div>
+    <button onclick="addItemRow()">Add Item</button>
+    <button onclick="submitReceipt()">Print Receipt</button>
+
+    <script>
+        let itemCount = 1;        
+
+        function addItemRow() {
+            itemCount++;
+            let container = document.getElementById('items_container');
+            let newRow = document.createElement('div');
+            newRow.classList.add('item_row');
+            newRow.innerHTML = `
+                <input type="text" class="item" placeholder="Item ${itemCount}">
+                <input type="number" class="quantity" placeholder="Qty" min="1" value="1">
+                <input type="number" class="price" placeholder="Price">
+                <button onclick="removeItemRow(this)">Remove</button>
+            `;
+            container.appendChild(newRow);
+        }
+
+        function removeItemRow(button) {
+            button.parentNode.remove(); // Remove the parent row
+        }
+
+        async function submitReceipt() {
+            let customerElements = document.querySelector('.customer');
+            let itemElements = document.querySelectorAll('.item');
+            let priceElements = document.querySelectorAll('.price');
+            let items = Array.from(itemElements).map(el => el.value);
+            let prices = Array.from(priceElements).map(el => el.value);
+            console.log(customerElements.value);
+            await eel.print_receipt(items, prices, customerElements.value); 
+        }
+    </script>
+</body>
+</html>
