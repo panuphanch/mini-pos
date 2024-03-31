@@ -4,6 +4,12 @@ async function loadProductData() {
     let productList = await eel.load_products()();
 
     const productSelect = document.getElementById('productSelect');
+    productSelect.innerHTML = '';
+    const selectOption = document.createElement('option');
+    selectOption.value = "";
+    selectOption.textContent = "เลือกเมนู";
+    productSelect.appendChild(selectOption);
+    
     productList.forEach(line => {
         const [_, item, price] = line;
         const option = document.createElement('option');

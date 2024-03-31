@@ -1,4 +1,4 @@
-from crc16pure import crc16xmodem 
+from .crc16pure import crc16xmodem 
 
 def generate_promptpay_qr(account_type, account_id, amount, multiple_use=False):
     """

@@ -1,11 +1,6 @@
 ## TODO:
-## 1. Product management page
-##    1.1. Display Products
-##    1.2. Add Product
-##    1.3. Update Product
-##    1.4. Remove Product
-## 2. Link between both page (Maybe show as tab)
-## 3. Pack software
+## 1. When add, edit, remove product dropdown on order_management.html incorrect.
+## 2. Pack software
 ## NOTE:
 ## 1. Check after pack software how to change logo
 ## 2. Check availability on both Windows, and macOS
@@ -13,11 +8,12 @@
 import eel, csv, os
 from escpos.printer import Network
 from datetime import datetime
-from promptpay import generate_promptpay_qr
+from _internal.promptpay import generate_promptpay_qr
 
 PRINTER_IP = '192.168.1.55'
-PRODUCTS_FILE = 'products.csv'
-ORDERS_FILE = 'orders.csv'
+PRODUCTS_FILE = '_internal/products.csv'
+ORDERS_FILE = '_internal/orders.csv'
+LOGO = '_internal/logo.png'
 
 eel.init('web')
 
@@ -32,7 +28,7 @@ def load_products():
     return products
 
 def get_last_id():
-    with open('products.csv', 'r', newline='', encoding='utf-8') as file:
+    with open(PRODUCTS_FILE, 'r', newline='', encoding='utf-8') as file:
         reader = csv.reader(file)
         last_row = None
         for row in reader:
@@ -41,7 +37,7 @@ def get_last_id():
 
 @eel.expose
 def add_product(product_name, product_price):
-    with open('products.csv', 'a', newline='', encoding='utf-8') as file:
+    with open(PRODUCTS_FILE, 'a', newline='', encoding='utf-8') as file:
         writer = csv.writer(file)
         last_id = get_last_id()
         new_id = last_id + 1
@@ -50,12 +46,12 @@ def add_product(product_name, product_price):
 @eel.expose
 def edit_product(product_id, new_name, new_price):
     products = []
-    with open('products.csv', 'r', newline='', encoding='utf-8') as file:
+    with open(PRODUCTS_FILE, 'r', newline='', encoding='utf-8') as file:
         reader = csv.reader(file)
         for row in reader:
             products.append(row)
 
-    with open('products.csv', 'w', newline='', encoding='utf-8') as file:
+    with open(PRODUCTS_FILE, 'w', newline='', encoding='utf-8') as file:
         writer = csv.writer(file)
         for row in products:
             if row[0] == product_id:
@@ -66,13 +62,13 @@ def edit_product(product_id, new_name, new_price):
 @eel.expose
 def delete_product(product_id):
     products = []
-    with open('products.csv', 'r', newline='', encoding='utf-8') as file:
+    with open(PRODUCTS_FILE, 'r', newline='', encoding='utf-8') as file:
         reader = csv.reader(file)
         for row in reader:
             if row[0] != product_id:  # Keep rows that don't match the ID
                 products.append(row)
 
-    with open('products.csv', 'w', newline='', encoding='utf-8') as file:
+    with open(PRODUCTS_FILE, 'w', newline='', encoding='utf-8') as file:
         writer = csv.writer(file)
         writer.writerows(products) 
 
@@ -107,7 +103,6 @@ def save_order(items, quantities, prices, customer_name):
                 '|'.join(prices),
                 f"{total_price:.2f}"
             ]
-        writer.writerow("\n")
         writer.writerow(order_data)
 
 @eel.expose
@@ -121,7 +116,7 @@ def print_receipt(items, quantities, prices, customer_name):
 
     # # Logo (If your printer supports it)
     printer.set(align='center')
-    printer.image('logo.png')
+    printer.image(LOGO)
     printer.text("------------------------------------------------\n")
 
     printer.set(align='center')
@@ -166,4 +161,4 @@ def calculated_total(prices, quantities):
         total_price += float(price) * int(quantity)
     return total_price
 
-eel.start('index.html', size=(300, 300), mode='edge') 
+eel.start('index.html', size=(1200, 900)) # , mode='edge') ## add mode if chrome not available

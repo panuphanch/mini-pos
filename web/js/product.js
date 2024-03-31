@@ -1,6 +1,7 @@
 async function loadProducts() {
     let products = await eel.load_products()(); // Call Python function
     displayProducts(products);
+    loadProductData();
 }
 
 function displayProducts(products) {
@@ -41,8 +42,7 @@ async function addProduct(event) {
     productNameInput.value = '';
     productPriceInput.value = '';
 
-    loadProducts(); 
-    loadProductData();
+    loadProducts();
 }
 
 async function editProduct(productId, productName, productPrice) {
@@ -65,8 +65,8 @@ async function submitEditForm() {
 
 async function deleteProduct(productId) {
     if (confirm("Are you sure you want to delete this product?")) {
+        console.log("Confirm");
         await eel.delete_product(productId)();
         loadProducts();
     }
 }
-
