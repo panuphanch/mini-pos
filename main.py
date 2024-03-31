@@ -10,24 +10,105 @@
 ## 1. Check after pack software how to change logo
 ## 2. Check availability on both Windows, and macOS
 
-import eel, csv
+import eel, csv, os
 from escpos.printer import Network
 from datetime import datetime
 from promptpay import generate_promptpay_qr
 
 PRINTER_IP = '192.168.1.55'
+PRODUCTS_FILE = 'products.csv'
+ORDERS_FILE = 'orders.csv'
 
 eel.init('web')
 
 @eel.expose
 def load_products():
     products = []
-    with open("products.csv", 'r', encoding='UTF-8') as file:
-        csvreader = csv.reader(file)
-        header = next(csvreader)
-        for row in csvreader:
+    with open(PRODUCTS_FILE, 'r', encoding='UTF-8') as csv_file:
+        csv_reader = csv.reader(csv_file)
+        header = next(csv_reader)
+        for row in csv_reader:
             products.append(row)
     return products
+
+def get_last_id():
+    with open('products.csv', 'r', newline='', encoding='utf-8') as file:
+        reader = csv.reader(file)
+        last_row = None
+        for row in reader:
+            last_row = row
+        return int(last_row[0]) if last_row else 0
+
+@eel.expose
+def add_product(product_name, product_price):
+    with open('products.csv', 'a', newline='', encoding='utf-8') as file:
+        writer = csv.writer(file)
+        last_id = get_last_id()
+        new_id = last_id + 1
+        writer.writerow([new_id, product_name, product_price])
+
+@eel.expose
+def edit_product(product_id, new_name, new_price):
+    products = []
+    with open('products.csv', 'r', newline='', encoding='utf-8') as file:
+        reader = csv.reader(file)
+        for row in reader:
+            products.append(row)
+
+    with open('products.csv', 'w', newline='', encoding='utf-8') as file:
+        writer = csv.writer(file)
+        for row in products:
+            if row[0] == product_id:
+                row[1] = new_name
+                row[2] = new_price
+            writer.writerow(row)
+
+@eel.expose
+def delete_product(product_id):
+    products = []
+    with open('products.csv', 'r', newline='', encoding='utf-8') as file:
+        reader = csv.reader(file)
+        for row in reader:
+            if row[0] != product_id:  # Keep rows that don't match the ID
+                products.append(row)
+
+    with open('products.csv', 'w', newline='', encoding='utf-8') as file:
+        writer = csv.writer(file)
+        writer.writerows(products) 
+
+
+@eel.expose
+def load_orders():
+    orders = []
+    if os.path.exists(ORDERS_FILE):
+        with open(ORDERS_FILE, 'r', encoding='UTF-8') as csv_file:
+            csv_reader = csv.reader(csv_file)
+            header = next(csv_reader)
+            for row in csv_reader:
+                orders.append([column.replace("|", ", ") for column in row])
+                
+    return orders
+
+@eel.expose
+def save_order(items, quantities, prices, customer_name):
+    total_price = calculated_total(prices, quantities)
+    
+    with open(ORDERS_FILE, 'a', newline='', encoding='UTF-8') as csv_file:
+        writer = csv.writer(csv_file)
+
+        if not os.path.exists(ORDERS_FILE):
+            writer.writerow(['date', 'customer', 'items', 'amounts', 'prices', 'total'])
+        
+        order_data = [
+                datetime.now().strftime("%d/%m/%Y %H:%M"),
+                customer_name,
+                '|'.join(items),
+                '|'.join(quantities),
+                '|'.join(prices),
+                f"{total_price:.2f}"
+            ]
+        writer.writerow("\n")
+        writer.writerow(order_data)
 
 @eel.expose
 def print_receipt(items, quantities, prices, customer_name):
@@ -36,7 +117,7 @@ def print_receipt(items, quantities, prices, customer_name):
     # Set thai character
     printer.charcode("THAI18")
 
-    total_price = sum(float(price) for price in prices)
+    total_price = calculated_total(prices, quantities)
 
     # # Logo (If your printer supports it)
     printer.set(align='center')
@@ -78,5 +159,11 @@ def print_receipt(items, quantities, prices, customer_name):
     printer.text(datetime.now().strftime("%d/%m/%Y, %H:%M\n"))
 
     printer.cut()
+
+def calculated_total(prices, quantities):
+    total_price = 0
+    for price, quantity in zip(prices, quantities):
+        total_price += float(price) * int(quantity)
+    return total_price
 
 eel.start('index.html', size=(300, 300), mode='edge') 

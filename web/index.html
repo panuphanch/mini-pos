@@ -3,75 +3,63 @@
 <head>
     <title>Thermal Receipt Printer</title>
     <script type="text/javascript" src="/eel.js"></script>
+    <link href="css/bootstrap.min.css" rel="stylesheet" />
+    <script src="js/bootstrap.min.js" type="text/javascript"></script>
+    <script src="js/order.js" type="text/javascript"></script>
+    <script src="js/product.js" type="text/javascript"></script>
 </head>
-<body onload="loadProductData()">
-    <h1>Enter Receipt Details</h1>
-    <input type="text" class="customer" placeholder="Customer name" />
-    <br /><br />
-    <select id="productSelect">
-        <option value="">เลือกเมนู</option> 
-    </select>
-    <br />
-    <div id="items_container" style="margin-top: 10px; margin-bottom: 10px;">
+<body>
+    <div class="container">
+        <ul class="nav nav-pills nav-fill" id="myTab" role="tablist">
+            <li class="nav-item" role="presentation">
+            <button class="nav-link active" id="receipt-tab" data-bs-toggle="tab" data-bs-target="#receipt" type="button" role="tab">Receipt</button>
+            </li>
+            <li class="nav-item" role="presentation">
+                <button class="nav-link" id="products-tab" data-bs-toggle="tab" data-bs-target="#products" type="button" role="tab">Products</button>
+            </li>
+        </ul>
+    
+        <div class="tab-content pt-5" id="myTabContent">
+            <div class="tab-pane fade show active" id="receipt" role="tabpanel"></div>
+            <div class="tab-pane fade" id="products" role="tabpanel"></div>
+        </div>
     </div>
-    <button onclick="addItemRow()">Add Item</button>
-    <button onclick="submitReceipt()">Print Receipt</button>
 
     <script>
-        let itemCount = 1;
+        loadReceiptTab();
 
-        function addItemRow(item = "", price = "") {
-            itemCount++;
-            let container = document.getElementById('items_container');
-            let newRow = document.createElement('div');
-            newRow.classList.add('item_row');
-            newRow.innerHTML = `
-                <input type="text" class="item" placeholder="Item ${itemCount}" value="${item}">
-                <input type="number" class="quantity" placeholder="Qty" min="1" value="1">
-                <input type="number" class="price" placeholder="Price" value="${parseInt(price, 10)}">
-                <button onclick="removeItemRow(this)">Remove</button>
-            `;
-            container.appendChild(newRow);
-        }
+        const receiptTab = document.getElementById('receipt-tab'); 
+        const productsTab = document.getElementById('products-tab');
 
-        function removeItemRow(button) {
-            button.parentNode.remove(); // Remove the parent row
-        }
+        receiptTab.addEventListener('click', loadReceiptTab);
+        productsTab.addEventListener('click', loadProductsTab);
 
-        async function submitReceipt() {
-            let customerElements = document.querySelector('.customer');
-            let itemElements = document.querySelectorAll('.item');
-            let quantityElements = document.querySelectorAll('.quantity');
-            let priceElements = document.querySelectorAll('.price');
-            let items = Array.from(itemElements).map(el => el.value);
-            let quantities = Array.from(quantityElements).map(el => el.value);
-            let prices = Array.from(priceElements).map(el => el.value);
-            await eel.print_receipt(items, quantities, prices, customerElements.value); 
-        }
-
-        async function loadProductData() {
-            let productList = await eel.load_products()();
-
-            const productSelect = document.getElementById('productSelect');
-            productList.forEach(line => {
-                const [item, price] = line;
-                const option = document.createElement('option');
-                option.value = item;
-                option.textContent = item;
-                option.dataset.price = price;
-                productSelect.appendChild(option);
-            });
-        }
-
-        const productSelect = document.getElementById('productSelect');
-        productSelect.addEventListener('change', function() {
-            const selectedItem = this.value;
-            const selectedPrice = this.options[this.selectedIndex].dataset.price;
-
-            if (selectedItem) { 
-                addItemRow(selectedItem, selectedPrice);
+        async function loadReceiptTab() {
+            const receiptPane = document.getElementById('receipt');
+            // const contentContainer = document.getElementById('tabContentContainer');
+            if (receiptPane.innerHTML === '') { // Only load content if not already loaded
+                console.log("Load order content");
+                const response = await fetch('order_management.html');
+                const htmlContent = await response.text();
+                receiptPane.innerHTML = htmlContent;
+                
+                loadProductData();
+                displayOrders();
             }
-        });
+        }
+
+        async function loadProductsTab() {
+            const productPane = document.getElementById('products');
+            // const contentContainer = document.getElementById('tabContentContainer');
+            if (productPane.innerHTML === '') { // Only load content if not already loaded
+                console.log("Load product content");
+                const response = await fetch('product_management.html');
+                const htmlContent = await response.text();
+                productPane.innerHTML = htmlContent;
+                
+                loadProducts();
+            }
+        }
     </script>
 </body>
 </html>
