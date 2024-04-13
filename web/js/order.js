@@ -25,6 +25,7 @@ function removeItemRow(button) {
 }
 
 function addItemFromSelect(selectElement) {
+    console.log(selectElement);
     const selectedItem = selectElement.value;
     const selectedPrice = selectElement.options[selectElement.selectedIndex].dataset.price;
 
@@ -37,41 +38,46 @@ function addItemRow(item = "", price = "") {
     itemCount++;
     let container = document.getElementById('items_container');
     let newRow = document.createElement('div');
-    newRow.classList.add('row', 'mb-2', 'item_row'); // Add row class for Bootstrap grid
+    newRow.classList.add('row', 'mb-2', 'item_row');
+    newRow.style.paddingRight = "0";
 
     newRow.innerHTML = `
-				<div class="col-6">
-						<input type="text" class="item form-control col-6" value="${item}" disabled />
-				</div>
-				<div class="input-group col-3" style="width: 25% !important">
-						<span class="input-group-text">฿</span>
-						<input type="text" class="price form-control" value="${(Math.round(price * 100) / 100).toFixed(2)}" disabled />
-				</div>
-				<div class="col-2">
-						<input type="number" class="quantity form-control" placeholder="Qty" min="1" value="1">
-				</div>
-				<div class="col-1">
-						<button onclick="removeItemRow(this)" class="btn btn-danger btn-sm">Remove</button> 
-				</div>
-		`;
+        <div class="input-group mb-2" style="padding-right: 0;">
+            <input type="text" class="form-control product" style="width: 30%" value="${item}" disabled />
+            <span class="input-group-text">฿</span>
+            <input type="text" class="form-control price" value="${(Math.round(price * 100) / 100).toFixed(2)}" disabled />
+            <input type="number" class="form-control quantity" placeholder="Qty" min="1" value="1">
+            <button onclick="removeItemRow(this)" class="form-control btn btn-danger btn-sm">Remove</button>
+        </div>
+    `;
     container.appendChild(newRow);
 }
 
-async function saveOrder() {
+async function saveOrder(event) {
+    event.preventDefault();
+
     let customer_name = document.querySelector('.customer').value;
-    let itemElements = document.querySelectorAll('.item');
+    let productElements = document.querySelectorAll('.product');
     let quantityElements = document.querySelectorAll('.quantity');
     let priceElements = document.querySelectorAll('.price');
 
-    let items = Array.from(itemElements).map(el => el.value);
+    if (productElements.length === 0) {
+        showAlertModal('Please add at least one product.');
+        return;
+    }
+
+    let products = Array.from(productElements).map(el => el.value);
     let quantities = Array.from(quantityElements).map(el => el.value);
     let prices = Array.from(priceElements).map(el => el.value);
 
-    await eel.save_order(items, quantities, prices, customer_name)();
+    await eel.save_order(products, quantities, prices, customer_name)();
     displayOrders();
 }
 
 async function displayOrders() {
+    const currentPage = $('#orderTable').DataTable().page();
+    $('#orderTable').DataTable().destroy();
+
     const orderTable = document.getElementById('orderTable').querySelector('tbody');
     orderTable.innerHTML = ''; // Clear existing order rows
 
@@ -83,6 +89,7 @@ async function displayOrders() {
         let itemsCell = row.insertCell();
         let totalCell = row.insertCell();
         let printCell = row.insertCell();
+        printCell.classList.add('text-center');
 
         let items = order[2].split(',');
         let quantities = order[3].split(',');
@@ -100,13 +107,23 @@ async function displayOrders() {
         itemsCell.innerHTML = itemsHtml;
         totalCell.textContent = "฿" + order[5];
 
+        let customerName = order[1].replace(/'/g, "\\'");
 
         printCell.innerHTML = `
-						<button class="btn btn-secondary" onclick="printReceipt('${order[1]}', '${order[2]}', '${order[3]}', '${order[4]}')">
-								Print
-						</button>
-				`;
+            <button class="btn btn-secondary" onclick="printReceipt('${customerName}', '${order[2]}', '${order[3]}', '${order[4]}')">
+                    Print
+            </button>
+        `;
     });
+
+    $.fn.dataTable.moment('DD/MM/YYYY HH:mm');
+
+    $('#orderTable').DataTable({
+        "pageLength": 5,
+        "lengthChange": false,
+        "searching": false,
+        "order": [[0, "desc"]]
+    }).page(currentPage).draw('page');
 }
 
 async function printReceipt(customer_name, items, quantities, prices) {
@@ -126,4 +143,20 @@ async function submitReceipt() {
     let quantities = Array.from(quantityElements).map(el => el.value);
     let prices = Array.from(priceElements).map(el => el.value);
     await eel.print_receipt(items, quantities, prices, customerElements.value);
+}
+
+async function syncOrder() {
+    const syncButton = document.getElementById('syncButton');
+    syncButton.disabled = true;
+
+    try
+    {
+        await eel.sync_orders_to_google_sheet()();
+        showAlertModal("Orders synced successfully!");
+    } catch (e) {
+        showAlertModal("An error occurred while syncing orders.");
+    } finally {
+        syncButton.disabled = false;
+        displayOrders();
+    }
 }

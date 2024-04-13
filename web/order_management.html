@@ -6,40 +6,53 @@
 </head>
 
 <body>
-	<div class="container">
-		<h1>Enter Receipt Details</h1>
-		<hr>
-		<div class="row mt-3 mb-4">
-			<div class="col-md-12 mb-1">
-				<label for="customer-name" class="form-label">Customer Name</label>
-				<input type="text" class="customer form-control" id="customer-name" required />
-			</div>
-			<div class="col-md-12">
-				<select id="productSelect" class="form-control" onchange="addItemFromSelect(this)">
-					<option value="">เลือกเมนู</option>
-				</select>
+	<div class="row">
+		<div class="col-md-5">
+            <h2>Add Order</h2>
+			<form onsubmit="saveOrder(event); return false;">
+				<div class="row mb-4">
+					<div class="col-md-12 mb-1">
+						<label for="customer-name" class="form-label">Customer Name</label>
+						<input type="text" class="customer form-control" id="customer-name" required />
+					</div>
+					<div class="col-md-12">
+						<label for="productSelect" class="form-label">Select Product</label>
+						<select id="productSelect" class="form-control" onchange="addItemFromSelect(this)">
+							<option value="">เลือกเมนู</option>
+						</select>
+					</div>
+				</div>
+				<div id="items_container" class="row mb-3 pr-0"></div>
+				<button class="btn btn-success">Save Order</button>
+			</form>
+		</div>
+
+		<div class="col-md-7">
+			<div id="orderTableContainer" class="row">
+				<div class="d-flex flex-row">
+					<div class="w-50 d-inline-block">
+						<h2>Order History</h2>
+					</div>
+					<div class="w-50 d-inline-block" style="display: flex !important;justify-content: end;">
+						<button id="syncButton" class="btn btn-primary" onclick="syncOrder()">
+							Sync Data
+						</button>
+					</div>
+				</div>
+				<table id="orderTable" class="table table-striped"">
+					<thead>
+						<tr>
+							<th class="text-center">Date</th>
+							<th class="text-center">Customer</th>
+							<th class="text-center">Items</th>
+							<th class="text-center">Total</th>
+							<th class="text-center">Receipt</th>
+						</tr>
+					</thead>
+					<tbody>
+					</tbody>
+				</table>
 			</div>
 		</div>
-		<div id="items_container" class="row mb-3"></div>
-		<button onclick="saveOrder()" class="btn btn-success">Save Order</button>
-		<!-- <button onclick="submitReceipt()" class="btn btn-success">Print Receipt</button> -->
-
-		<div id="orderTableContainer" class="row mt-4">
-			<h2>Order History</h2>
-			<table id="orderTable" class="table table-striped"">
-                <thead>
-                    <tr>
-                        <th>Date</th>
-                        <th>Customer</th>
-                        <th>Items</th>
-                        <th>Total</th>
-                        <th>Receipt</th>
-                    </tr>
-                </thead>
-                <tbody>
-                </tbody>
-            </table>
-        </div>
-    </div>
 </body>
 </html>

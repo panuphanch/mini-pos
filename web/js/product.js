@@ -5,6 +5,9 @@ async function loadProducts() {
 }
 
 function displayProducts(products) {
+    const currentPage = $('#productTable').DataTable().page();
+    $('#productTable').DataTable().destroy();
+
     const productList = document.getElementById('products-list');
     productList.innerHTML = ''; // Clear existing product rows
 
@@ -16,16 +19,21 @@ function displayProducts(products) {
         const nameCell = row.insertCell();
         const priceCell = row.insertCell();
         const actionsCell = row.insertCell();
+        actionsCell.classList.add('text-center');
 
         nameCell.textContent = name;
         priceCell.textContent = price;
 
-        actionsCell.innerHTML = ` 
-            <button class="btn btn-secondary btn-sm" onclick="editProduct('${id}', '${name}', '${price}')">Edit</button>
+        actionsCell.innerHTML = `
             <button class="btn btn-danger btn-sm" onclick="deleteProduct('${id}')">Delete</button>
         `;
-        // Add buttons for edit, delete, etc. to actionsCell
     });
+
+    $('#productTable').DataTable({
+        "pageLength": 5,
+        "lengthChange": false,
+        "destroy": true
+    }).page(currentPage).draw('page');
 }
 
 async function addProduct(event) {
@@ -63,10 +71,34 @@ async function submitEditForm() {
     loadProducts();
 }
 
-async function deleteProduct(productId) {
-    if (confirm("Are you sure you want to delete this product?")) {
-        console.log("Confirm");
+async function deleteProduct(productId) {    
+    const confirmDeleteModal = new bootstrap.Modal(document.getElementById('confirmDeleteModal'));
+    const confirmDeleteButton = document.getElementById('confirmDeleteButton');
+    const confirmMessage = document.getElementById('confirmMessage');
+
+    confirmMessage.innerText = "Are you sure you want to delete this product?";
+
+    confirmDeleteButton.onclick = async function() {
         await eel.delete_product(productId)();
+        loadProducts();
+        confirmDeleteModal.hide();
+    };
+
+    confirmDeleteModal.show();
+}
+
+async function syncProduct() {
+    const syncButton = document.getElementById('syncProductButton');
+    syncButton.disabled = true;
+
+    try
+    {
+        await eel.sync_products_to_google_sheet()();
+        showAlertModal("Products synced successfully!");
+    } catch (e) {
+        showAlertModal("An error occurred while syncing products.");
+    } finally {
+        syncButton.disabled = false;
         loadProducts();
     }
 }

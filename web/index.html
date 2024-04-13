@@ -1,15 +1,25 @@
 <!DOCTYPE html>
 <html>
 <head>
-    <title>Thermal Receipt Printer</title>
+    <title>Granny Saidso</title>
     <script type="text/javascript" src="/eel.js"></script>
+    <script src="js/jqury.min.js" type="text/javascript"></script>
     <link href="css/bootstrap.min.css" rel="stylesheet" />
     <script src="js/bootstrap.min.js" type="text/javascript"></script>
+    <script src="js/index.js" type="text/javascript"></script>
     <script src="js/order.js" type="text/javascript"></script>
     <script src="js/product.js" type="text/javascript"></script>
+    <link href="css/datatables.min.css" rel="stylesheet" />
+    <script src="js/datatables.min.js" type="text/javascript"></script>
+    <script src="js/moment.min.js"></script>
+    <script src="js/datetime-moment.js"></script>
 </head>
 <body>
-    <div class="container pt-5">
+    <div class="container-fluid">
+        <div class="d-flex align-items-center mb-4">
+            <img src="images/logo.png" alt="Logo" style="width: 100px; height: 100px;">
+            <h1 class="ml-3">Granny Saidso</h1>
+        </div>
         <ul class="nav nav-pills nav-fill" id="myTab" role="tablist">
             <li class="nav-item" role="presentation">
             <button class="nav-link active" id="receipt-tab" data-bs-toggle="tab" data-bs-target="#receipt" type="button" role="tab">Receipt</button>
@@ -18,15 +28,53 @@
                 <button class="nav-link" id="products-tab" data-bs-toggle="tab" data-bs-target="#products" type="button" role="tab">Products</button>
             </li>
         </ul>
-    
-        <div class="tab-content pt-5" id="myTabContent">
+
+        <div class="tab-content pt-3" id="myTabContent">
             <div class="tab-pane fade show active" id="receipt" role="tabpanel"></div>
             <div class="tab-pane fade" id="products" role="tabpanel"></div>
         </div>
     </div>
 
+    <!-- Alert Modal -->
+    <div class="modal fade" id="alertModal" tabindex="-1" aria-labelledby="alertModalLabel" aria-hidden="true">
+        <div class="modal-dialog">
+            <div class="modal-content">
+                <div class="modal-header">
+                    <h5 class="modal-title" id="alertModalLabel">Info</h5>
+                    <button type="button" class="btn-close" data-bs-dismiss="modal" aria-label="Close"></button>
+                </div>
+                <div class="modal-body">
+                    <p id="alertMessage"></p>
+                </div>
+                <div class="modal-footer">
+                    <button type="button" class="btn btn-primary" data-bs-dismiss="modal">OK</button>
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <!-- Confirm Modal -->
+    <div class="modal fade" id="confirmDeleteModal" tabindex="-1" aria-labelledby="confirmDeleteModalLabel" aria-hidden="true">
+        <div class="modal-dialog">
+          <div class="modal-content">
+            <div class="modal-header">
+              <h5 class="modal-title" id="confirmDeleteModalLabel">Confirm Delete</h5>
+              <button type="button" class="btn-close" data-bs-dismiss="modal" aria-label="Close"></button>
+            </div>
+            <div class="modal-body">
+                <p id="confirmMessage"></p>
+            </div>
+            <div class="modal-footer">
+              <button type="button" class="btn btn-secondary" data-bs-dismiss="modal">Cancel</button>
+              <button type="button" class="btn btn-danger" id="confirmDeleteButton">Delete</button>
+            </div>
+          </div>
+        </div>
+      </div>
+
     <script>
         loadReceiptTab();
+        // initializeDataTable();
 
         const receiptTab = document.getElementById('receipt-tab'); 
         const productsTab = document.getElementById('products-tab');
@@ -36,9 +84,7 @@
 
         async function loadReceiptTab() {
             const receiptPane = document.getElementById('receipt');
-            // const contentContainer = document.getElementById('tabContentContainer');
-            if (receiptPane.innerHTML === '') { // Only load content if not already loaded
-                console.log("Load order content");
+            if (receiptPane.innerHTML === '') {
                 const response = await fetch('order_management.html');
                 const htmlContent = await response.text();
                 receiptPane.innerHTML = htmlContent;
@@ -51,14 +97,25 @@
         async function loadProductsTab() {
             const productPane = document.getElementById('products');
             // const contentContainer = document.getElementById('tabContentContainer');
-            if (productPane.innerHTML === '') { // Only load content if not already loaded
-                console.log("Load product content");
+            if (productPane.innerHTML === '') {
                 const response = await fetch('product_management.html');
                 const htmlContent = await response.text();
                 productPane.innerHTML = htmlContent;
                 
                 loadProducts();
             }
+        }
+        
+        function initializeDataTable() {
+            $('#orderTable').DataTable({
+                "pageLength": 5,
+                "lengthChange": false,
+                "searching": false
+            });
+
+            $('#productTable').DataTable({
+                "pageLength": 5
+            });
         }
     </script>
 </body>
