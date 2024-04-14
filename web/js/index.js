@@ -5,3 +5,8 @@ function showAlertModal(content) {
 	document.getElementById('alertMessage').textContent = content;
 	alertModal.show();
 }
+
+function refreshLogo() {
+    var logo = document.getElementById('logo');
+    logo.src = "images/logo.png?t=" + new Date().getTime();
+}

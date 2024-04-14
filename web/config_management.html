@@ -1,0 +1,72 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+	<link href="https://stackpath.bootstrapcdn.com/bootstrap/4.3.1/css/bootstrap.min.css" rel="stylesheet">
+</head>
+<body>
+	<div class="container">
+		<!-- Change printer IP address and test print button -->
+		<label for="printerIP" class="form-label fw-bold">Printer IP Address</label>
+		<div class="input-group">
+			<input type="text" class="form-control" id="printerIP">
+			<button class="btn btn-primary" onclick="testPrint()">Test Print</button>
+		</div>
+		
+		<div class="form-group">
+			<label for="logoUpload" class="form-label fw-bold">Logo</label><span class="pl-2 text-muted fs-8" style="font-size: 10px;">Default resolution: 250x250 (to fit into receipt)</span>
+			<input type="file" class="form-control" id="logoUpload">
+		</div>
+
+		<!-- Recipe part -->
+		<div class="form-group">
+			<label for="shopName" class="form-label fw-bold">Shop Name</label>
+			<input type="text" class="form-control" id="shopName" value="Grannysaidso">
+		</div>
+
+		<div class="row">
+			<div class="form-group col-6">
+				<label for="phoneNumber" class="form-label fw-bold">Phone Number</label>
+				<input type="text" class="form-control" id="phoneNumber" value="064-241-5696">
+			</div>
+	
+			<div class="form-group col-6">
+				<label for="lineAccount" class="form-label fw-bold">Line Account</label>
+				<input type="text" class="form-control" id="lineAccount" value="@grannysaidso">
+			</div>
+		</div>
+
+		<div class="row">
+			<div class="form-group col-6">
+				<label for="qrText" class="form-label fw-bold">Text to Display Before QR Code</label>
+				<input type="text" class="form-control" id="qrText" value="Scan here to pay">
+			</div>
+
+			<!-- For QR Code radio button to choose phone number and id card then value of it. default is phone number 0000000000 -->
+			<div class="form-group col-6">
+				<label for="qrValue" class="form-label fw-bold">QR Code</label>
+				<div class="form-check form-check-inline">
+					<input class="form-check-input" type="radio" name="qrCode" id="qrPhoneNumber" value="phone" checked>
+					<label class="form-check-label" for="qrPhoneNumber">
+						Phone Number
+					</label>
+				</div>
+				<div class="form-check form-check-inline">
+					<input class="form-check-input" type="radio" name="qrCode" id="qrIdCard" value="id_card">
+					<label class="form-check-label" for="qrIdCard">
+						ID Card
+					</label>
+				</div>
+				<input type="text" class="form-control" id="qrValue" value="0000000000">
+			</div>
+		</div>
+
+		<!-- Footer text -->
+		<div class="form-group">
+			<label for="thankYouMessage" class="form-label fw-bold">Footer Text</label>
+			<input type="text" class="form-control" id="thankYouMessage" value="Thank you for always saving room for dessert!">
+		</div>
+
+		<button type="button" class="btn btn-primary" onclick="saveConfig()">Save Configuration</button>
+	</div>
+</body>
+</html>

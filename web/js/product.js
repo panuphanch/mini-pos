@@ -88,11 +88,14 @@ async function deleteProduct(productId) {
 }
 
 async function syncProduct() {
+    const spinnerWrapperEl = document.querySelector('.spinner-wrapper');
     const syncButton = document.getElementById('syncProductButton');
     syncButton.disabled = true;
 
     try
     {
+        spinnerWrapperEl.style.opacity = 0.5;
+		spinnerWrapperEl.style.display = 'flex';
         await eel.sync_products_to_google_sheet()();
         showAlertModal("Products synced successfully!");
     } catch (e) {
@@ -100,5 +103,10 @@ async function syncProduct() {
     } finally {
         syncButton.disabled = false;
         loadProducts();
+
+        spinnerWrapperEl.style.opacity = 0;
+		setTimeout(() => {
+			spinnerWrapperEl.style.display = 'none';			
+		}, 200);
     }
 }

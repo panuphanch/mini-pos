@@ -1,10 +1,9 @@
 ## TODO:
-## 1. Continue on products sync to Google Sheets: product.js to call main.py
-## 2. Create GH action to create executable file for both Windows and Mac
-## 3. Create a way to edit and delete orders
-## 4. Clear the order form after submitting
+## 1. DONE! Create configuration page to set the printer IP, test print, change logo, API key for google sheet, google sheet name, etc.
+## 2. Create a way to delete order
+## 3. Create GH action to create executable file for both Windows and Mac
 
-import eel, csv, os, gspread, io
+import eel, csv, os, gspread, io, json, base64
 from escpos.printer import Network
 from datetime import datetime
 from _internal.promptpay import generate_promptpay_qr
@@ -12,12 +11,12 @@ from oauth2client.service_account import ServiceAccountCredentials
 from PIL import Image
 import pandas as pd
 
-PRINTER_IP = '192.168.1.55'
 PRODUCT_COLUMNS = ['id', 'name', 'price']
 PRODUCTS_FILE = 'static/products.csv'
 ORDER_COLUMNS = ['date', 'customer_name', 'items', 'quantities', 'prices', 'total']
 ORDERS_FILE = 'static/orders.csv'
 SHEETS_CREDS = '_internal/grannysaidso-7abe2438dfe8.json'
+CONFIG_FILE = 'static/config.json'
 
 eel.init('web')
 
@@ -262,57 +261,134 @@ def get_image():
     return Image.open(io.BytesIO(image_data))
 
 @eel.expose
+def save_config(config):
+    if 'logo' in config and config['logo']:
+        logo_data = config['logo'].split(',')[1]
+        logo_bytes = base64.b64decode(logo_data)
+        image = Image.open(io.BytesIO(logo_bytes))
+        max_size = (250, 250)
+        image.thumbnail(max_size)
+        image_path = os.path.join('web', 'images', 'logo.png')
+        image.save(image_path, "PNG")        
+        del config['logo']
+
+    with open(CONFIG_FILE, 'w', encoding='UTF-8') as f:
+        json.dump(config, f)
+
+@eel.expose
+def load_config():
+    if os.path.exists(CONFIG_FILE):
+        with open(CONFIG_FILE, 'r', encoding='UTF-8') as f:
+            return json.load(f)
+    else:
+        return {
+            "printerIP": "192.168.1.55",
+            "shopName": "Grannysaidso",
+            "phoneNumber": "064-241-5696",
+            "lineAccount": "@grannysaidso",
+            "qrText": "Scan here to pay",
+            "qrCodeType": "phone",
+            "qrCodeValue": "0000000000",
+            "thankYouMessage": "Thank you for always saving room for dessert!"
+        }
+    
+@eel.expose
+def test_print(printerIP):
+    """Print a test message and cut the paper."""
+    try:
+        p = Network(printerIP)
+        p.text("Test print successful!\n")
+        p.cut()
+        return "Test print successful!"
+    except OSError as e:
+        if '10057' in str(e):
+            return "Failed to print: The printer is not connected."
+        else:
+            return f"Failed to print: {str(e)}"
+    except Exception as e:
+        return f"Failed to print: {str(e)}"
+    
+    return "Success"
+
+@eel.expose
 def print_receipt(items, quantities, prices, customer_name):
     print("Printing receipt...")
 
-    printer = Network(PRINTER_IP)
+    try:
+        with open(CONFIG_FILE, 'r') as f:
+            config = json.load(f)
+            printer_ip = Network(config['printerIP'])
+            shop_name = config['shopName']
+            shop_phone = config['shopPhone']
+            shop_line = config['shopLine']
+            qr_text = config['qrText']
+            qr_code_type = config['qrCodeType']
+            qr_code_value = config['qrCodeValue']
+            thank_you_message = config['thankYouMessage'] 
+    except Exception as e:
+        print(f"Failed to read config file: {str(e)}")
+        return f"Failed to read config file: {str(e)}"
 
-    # Set thai character
-    printer.charcode("THAI18")
+    try:
+        printer = Network(printer_ip)
 
-    total_price = calculated_total(prices, quantities)
+        # Set thai character
+        printer.charcode("THAI18")
 
-    # # Logo (If your printer supports it)
-    printer.set(align='center')
-    printer.image(get_image())
-    printer.text("------------------------------------------------\n")
+        total_price = calculated_total(prices, quantities)
 
-    printer.set(align='center')
-    printer.text('Grannysaidso\n')
-    printer.text('064-241-5696\n')
-    printer.text('Line @grannysaidso\n')
-    printer.text("------------------------------------------------\n")
+        # Logo
+        printer.set(align='center')
+        printer.image(get_image())
+        printer.text("------------------------------------------------\n")
 
-    printer.set(align='left')
-    printer.text(f"Customer: {customer_name}\n")
-    printer.text("------------------------------------------------\n")
+        printer.set(align='center')
+        printer.text(f'{shop_name}\n')
+        printer.text(f'{shop_phone}\n')
+        printer.text(f'Line {shop_line}\n')
+        printer.text("------------------------------------------------\n")
 
-    printer.set(align='left')
-    for item, quantity, price in zip(items, quantities, prices):
-        quantity = float(quantity)  # Parse quantity to float
-        price = float(price)        # Parse price to float
+        printer.set(align='left')
+        printer.text(f"Customer: {customer_name}\n")
+        printer.text("------------------------------------------------\n")
 
-        item_total_price = quantity * price
-        printer.text(f"{item}".ljust(40) + f"฿{item_total_price:.2f}\n")
-        printer.text(f"{quantity} x ฿{price:.2f}\n\n")
-    printer.text("------------------------------------------------\n")
+        printer.set(align='left')
+        for item, quantity, price in zip(items, quantities, prices):
+            quantity = float(quantity)  # Parse quantity to float
+            price = float(price)        # Parse price to float
 
-    printer.set(align='left', text_type='B')
-    printer.text("Amount due".ljust(40) + f"฿{total_price:.2f}\n\n")
-    printer.text("------------------------------------------------\n")
+            item_total_price = quantity * price
+            printer.text(f"{item}".ljust(40) + f"฿{item_total_price:.2f}\n")
+            printer.text(f"{quantity} x ฿{price:.2f}\n\n")
+        printer.text("------------------------------------------------\n")
 
-    qr_payload = generate_promptpay_qr("id_card", "1100700546038", total_price)
-    printer.set(align='center')
-    printer.text("Scan here to pay\n")
-    printer.qr(qr_payload, size=7)
-    printer.text("------------------------------------------------\n")
+        printer.set(align='left', text_type='B')
+        printer.text("Amount due".ljust(40) + f"฿{total_price:.2f}\n\n")
+        printer.text("------------------------------------------------\n")
 
-    printer.set(align='center')
-    printer.text("Thank you for always saving room for dessert!\n")
-    printer.set(align='left')
-    printer.text(datetime.now().strftime("%d/%m/%Y, %H:%M\n"))
+        qr_payload = generate_promptpay_qr(qr_code_type, qr_code_value, total_price)
+        printer.set(align='center')
+        printer.text(f"{qr_text}\n")
+        printer.qr(qr_payload, size=7)
+        printer.text("------------------------------------------------\n")
 
-    printer.cut()
+        printer.set(align='center')
+        printer.text(f"{thank_you_message}\n")
+        printer.set(align='left')
+        printer.text(datetime.now().strftime("%d/%m/%Y, %H:%M\n"))
+
+        printer.cut()
+    except OSError as e:
+        if '10057' in str(e):
+            return "Failed to print: The printer is not connected."
+        else:
+            return f"Failed to print: {str(e)}"
+    except Exception as e:
+        print(f"Failed to print: {str(e)}")
+        return f"Failed to print: {str(e)}"
+    
+    print("Printing receipt... Done!")
+    return "Success"
 
 def calculated_total(prices, quantities):
     total_price = 0

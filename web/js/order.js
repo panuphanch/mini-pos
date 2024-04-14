@@ -127,11 +127,27 @@ async function displayOrders() {
 }
 
 async function printReceipt(customer_name, items, quantities, prices) {
-    const itemList = items.split(',').map(item => item.trim());
-    const quantityList = quantities.split(',').map(qty => qty.trim());
-    const priceList = prices.split(',').map(price => price.trim());
+    const spinnerWrapperEl = document.querySelector('.spinner-wrapper');
 
-    await eel.print_receipt(itemList, quantityList, priceList, customer_name);
+	try {
+        const itemList = items.split(',').map(item => item.trim());
+        const quantityList = quantities.split(',').map(qty => qty.trim());
+        const priceList = prices.split(',').map(price => price.trim());
+
+        var result = await eel.print_receipt(itemList, quantityList, priceList, customer_name);
+        
+        if (result !== "success") {
+            showAlertModal(result);
+        }
+    } catch (e) {
+		showAlertModal(e);
+	} finally {
+		spinnerWrapperEl.style.opacity = 0;
+
+		setTimeout(() => {
+			spinnerWrapperEl.style.display = 'none';			
+		}, 200);
+	}
 }
 
 async function submitReceipt() {
@@ -146,11 +162,14 @@ async function submitReceipt() {
 }
 
 async function syncOrder() {
+    const spinnerWrapperEl = document.querySelector('.spinner-wrapper');
     const syncButton = document.getElementById('syncButton');
     syncButton.disabled = true;
 
     try
     {
+        spinnerWrapperEl.style.opacity = 0.5;
+		spinnerWrapperEl.style.display = 'flex';
         await eel.sync_orders_to_google_sheet()();
         showAlertModal("Orders synced successfully!");
     } catch (e) {
@@ -158,5 +177,10 @@ async function syncOrder() {
     } finally {
         syncButton.disabled = false;
         displayOrders();
+
+        spinnerWrapperEl.style.opacity = 0;
+		setTimeout(() => {
+			spinnerWrapperEl.style.display = 'none';			
+		}, 200);
     }
 }

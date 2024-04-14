@@ -4,20 +4,28 @@
     <title>Granny Saidso</title>
     <script type="text/javascript" src="/eel.js"></script>
     <script src="js/jqury.min.js" type="text/javascript"></script>
+    <link href="css/style.css" rel="stylesheet" />
     <link href="css/bootstrap.min.css" rel="stylesheet" />
     <script src="js/bootstrap.min.js" type="text/javascript"></script>
     <script src="js/index.js" type="text/javascript"></script>
     <script src="js/order.js" type="text/javascript"></script>
     <script src="js/product.js" type="text/javascript"></script>
+    <script src="js/config.js" type="text/javascript"></script>
     <link href="css/datatables.min.css" rel="stylesheet" />
     <script src="js/datatables.min.js" type="text/javascript"></script>
     <script src="js/moment.min.js"></script>
     <script src="js/datetime-moment.js"></script>
 </head>
-<body>
+<body>    
+	<div class="spinner-wrapper" style="display: none;">
+		<div class="spinner-border text-warning" role="status">
+			<span class="visually-hidden">Loading...</span>
+		</div>
+	</div>
+
     <div class="container-fluid">
         <div class="d-flex align-items-center mb-4">
-            <img src="images/logo.png" alt="Logo" style="width: 100px; height: 100px;">
+            <img id="logo" src="images/logo.png" alt="Logo" style="width: 100px; height: 100px;">
             <h1 class="ml-3">Granny Saidso</h1>
         </div>
         <ul class="nav nav-pills nav-fill" id="myTab" role="tablist">
@@ -27,11 +35,15 @@
             <li class="nav-item" role="presentation">
                 <button class="nav-link" id="products-tab" data-bs-toggle="tab" data-bs-target="#products" type="button" role="tab">Products</button>
             </li>
+            <li class="nav-item" role="presentation">
+                <button class="nav-link" id="config-tab" data-bs-toggle="tab" data-bs-target="#config" type="button" role="tab">Configuration</button>
+            </li>
         </ul>
 
         <div class="tab-content pt-3" id="myTabContent">
             <div class="tab-pane fade show active" id="receipt" role="tabpanel"></div>
             <div class="tab-pane fade" id="products" role="tabpanel"></div>
+            <div class="tab-pane fade" id="config" role="tabpanel"></div>
         </div>
     </div>
 
@@ -73,14 +85,18 @@
       </div>
 
     <script>
+        const spnnierWrapperEl = document.querySelector('.spinner-wrapper');
+
         loadReceiptTab();
         // initializeDataTable();
 
         const receiptTab = document.getElementById('receipt-tab'); 
         const productsTab = document.getElementById('products-tab');
+        const configTab = document.getElementById('config-tab');
 
         receiptTab.addEventListener('click', loadReceiptTab);
         productsTab.addEventListener('click', loadProductsTab);
+        configTab.addEventListener('click', loadConfigTab);
 
         async function loadReceiptTab() {
             const receiptPane = document.getElementById('receipt');
@@ -103,6 +119,17 @@
                 productPane.innerHTML = htmlContent;
                 
                 loadProducts();
+            }
+        }
+
+        async function loadConfigTab() {
+            const configPane = document.getElementById('config');
+            if (configPane.innerHTML === '') {
+                const response = await fetch('config_management.html');
+                const htmlContent = await response.text();
+                configPane.innerHTML = htmlContent;
+
+                loadConfig();
             }
         }
         
