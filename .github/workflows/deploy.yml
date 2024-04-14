@@ -9,8 +9,7 @@ jobs:
     runs-on: ${{ matrix.os }}
     strategy:
       matrix:
-        # os: [windows-latest, macos-latest]
-        os: [windows-latest]
+        os: [windows-latest, macos-latest]
         python-version: [3.8]
 
     steps:
@@ -25,7 +24,7 @@ jobs:
         pip install -r requirement.txt
     - name: Build Application
       run: |
-        python -m eel main.py web --add-data "_internal/*;." --add-data "static/*;."
+        python -m eel main.py web --add-data "_internal/*:." --add-data "static/*:."
       shell: bash
     - name: Upload Artifact
       uses: actions/upload-artifact@v2
