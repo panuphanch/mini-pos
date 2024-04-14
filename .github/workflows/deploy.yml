@@ -24,13 +24,13 @@ jobs:
         pip install -r requirement.txt
     - name: Build Application
       run: |
-        python -m eel main.py web --add-data "_internal/*:." --add-data "static/*:."
+        python -m eel main.py web --add-data "_internal/*:." --add-data "static/*:." --onefile --noconsole
       shell: bash
     - name: Upload Artifact
       uses: actions/upload-artifact@v2
       with:
         name: myapp-${{ runner.os }}
-        path: dist/myapp*
+        path: dist/main.exe
   
   release:
     needs: build
