@@ -39,11 +39,11 @@ jobs:
     - name: Download Artifacts
       uses: actions/download-artifact@v2
       with:
-        name: mini-pos-windows-latest
+        name: mini-pos-Windows
         path: dist/
     - uses: actions/download-artifact@v2
       with:
-        name: mini-pos-macos-latest
+        name: mini-pos-macOS
         path: dist/
 
     - name: Create Release
