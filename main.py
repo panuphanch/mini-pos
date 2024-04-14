@@ -253,6 +253,22 @@ def save_order(items, quantities, prices, customer_name):
             ]
         writer.writerow(order_data)
 
+@eel.expose
+def delete_order(date, customer_name):
+    try:
+        # Read the CSV file into a DataFrame
+        df = pd.read_csv(ORDERS_FILE)
+
+        # Remove the row with the matching date and customer_name
+        df = df[(df['date'] != date) | (df['customer_name'] != customer_name)]
+
+        # Write the DataFrame back to the CSV file
+        df.to_csv(ORDERS_FILE, index=False)
+    except pd.errors.EmptyDataError:
+        print("The orders file is empty.")
+    except Exception as e:
+        print(f"Failed to delete order: {str(e)}")
+
 def get_image():
     image_path = os.path.join('web', 'images', 'logo.png') 
     with open(image_path, 'rb') as f:

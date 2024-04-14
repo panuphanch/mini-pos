@@ -90,6 +90,8 @@ async function displayOrders() {
         let totalCell = row.insertCell();
         let printCell = row.insertCell();
         printCell.classList.add('text-center');
+        let deleteCell = row.insertCell();
+        deleteCell.classList.add('text-center');
 
         let items = order[2].split(',');
         let quantities = order[3].split(',');
@@ -111,7 +113,15 @@ async function displayOrders() {
 
         printCell.innerHTML = `
             <button class="btn btn-secondary" onclick="printReceipt('${customerName}', '${order[2]}', '${order[3]}', '${order[4]}')">
-                    Print
+                Print
+            </button>
+        `;
+
+        deleteCell.innerHTML = `
+            <button class="btn" onclick="deleteOrder('${order[0]}', '${order[1]}')">
+                <svg xmlns="http://www.w3.org/2000/svg" width="30" height="30" fill="red" class="bi bi-x-circle-fill" viewBox="0 0 16 16">
+                    <path d="M16 8A8 8 0 1 1 0 8a8 8 0 0 1 16 0M5.354 4.646a.5.5 0 1 0-.708.708L7.293 8l-2.647 2.646a.5.5 0 0 0 .708.708L8 8.707l2.646 2.647a.5.5 0 0 0 .708-.708L8.707 8l2.647-2.646a.5.5 0 0 0-.708-.708L8 7.293z"/>
+                </svg>
             </button>
         `;
     });
@@ -122,7 +132,10 @@ async function displayOrders() {
         "pageLength": 5,
         "lengthChange": false,
         "searching": false,
-        "order": [[0, "desc"]]
+        "order": [[0, "desc"]],
+        "columnDefs": [
+            { "orderable": false, "targets": [-1, -2] }
+        ]
     }).page(currentPage).draw('page');
 }
 
@@ -148,6 +161,22 @@ async function printReceipt(customer_name, items, quantities, prices) {
 			spinnerWrapperEl.style.display = 'none';			
 		}, 200);
 	}
+}
+
+async function deleteOrder(date, customer) {
+    const confirmDeleteModal = new bootstrap.Modal(document.getElementById('confirmDeleteModal'));
+    const confirmDeleteButton = document.getElementById('confirmDeleteButton');
+    const confirmMessage = document.getElementById('confirmMessage');
+
+    confirmMessage.innerText = `Are you sure you want to delete the order from ${customer} on ${date}?`;
+
+    confirmDeleteButton.onclick = async function() {
+        await eel.delete_order(date, customer)();
+        displayOrders();
+        confirmDeleteModal.hide();
+    };
+
+    confirmDeleteModal.show();
 }
 
 async function submitReceipt() {
