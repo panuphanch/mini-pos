@@ -1,9 +1,4 @@
-## TODO:
-## 1. DONE! Create configuration page to set the printer IP, test print, change logo, API key for google sheet, google sheet name, etc.
-## 2. Create a way to delete order
-## 3. Create GH action to create executable file for both Windows and Mac
-
-import eel, csv, os, gspread, io, json, base64
+import eel, csv, os, gspread, io, json, base64, shutil
 from escpos.printer import Network
 from datetime import datetime
 from _internal.promptpay import generate_promptpay_qr
@@ -15,7 +10,7 @@ PRODUCT_COLUMNS = ['id', 'name', 'price']
 PRODUCTS_FILE = 'static/products.csv'
 ORDER_COLUMNS = ['date', 'customer_name', 'items', 'quantities', 'prices', 'total']
 ORDERS_FILE = 'static/orders.csv'
-SHEETS_CREDS = '_internal/grannysaidso-7abe2438dfe8.json'
+SHEETS_CREDS = '_internal/sheetsCreds.json'
 CONFIG_FILE = 'static/config.json'
 
 eel.init('web')
@@ -46,15 +41,37 @@ def add_product(product_name, product_price):
         new_id = last_id + 1
         writer.writerow([new_id, product_name, product_price])
 
-def get_google_sheet(worksheet_index):
+@eel.expose
+def test_sheets(sheet_name):
+    try:
+        get_google_sheet(0, sheet_name)
+        return f"Successfully connected to {sheet_name}!"
+    except Exception as e:
+        return f"Failed to connect to {sheet_name}: {str(e)}"
+
+def get_google_sheet(worksheet_index, sheet_name=None):
     scope = ['https://spreadsheets.google.com/feeds',
              'https://www.googleapis.com/auth/drive']
 
     credentials = ServiceAccountCredentials.from_json_keyfile_name(SHEETS_CREDS, scope)
     gc = gspread.authorize(credentials)
 
-    sh = gc.open("GrannySaidso Database")
-    worksheet = sh.get_worksheet(worksheet_index)
+    # change to retrieve the sheet name from config.json
+    if sheet_name is None:
+        print("Reading sheet name from config.json")
+        with open(CONFIG_FILE, 'r') as f:
+            config = json.load(f)
+            sheet_name = config['sheetName']
+        
+        if not sheet_name:
+            sh = gc.open("GrannySaidso Database")
+        else:
+            sh = gc.open(sheet_name)
+        worksheet = sh.get_worksheet(worksheet_index)
+    else:
+        print(f"Reading sheet name from parameter: {sheet_name}")
+        sh = gc.open(sheet_name)
+        worksheet = sh.get_worksheet(worksheet_index)
 
     return worksheet
 
@@ -278,18 +295,34 @@ def get_image():
 
 @eel.expose
 def save_config(config):
-    if 'logo' in config and config['logo']:
-        logo_data = config['logo'].split(',')[1]
-        logo_bytes = base64.b64decode(logo_data)
-        image = Image.open(io.BytesIO(logo_bytes))
-        max_size = (250, 250)
-        image.thumbnail(max_size)
-        image_path = os.path.join('web', 'images', 'logo.png')
-        image.save(image_path, "PNG")        
-        del config['logo']
+    try:
+        if 'logo' in config:
+            if config['logo']:
+                logo_data = config['logo'].split(',')[1]
+                logo_bytes = base64.b64decode(logo_data)
+                image = Image.open(io.BytesIO(logo_bytes))
+                max_size = (250, 250)
+                image.thumbnail(max_size)
+                image_path = os.path.join('web', 'images', 'logo.png')
+                image.save(image_path, "PNG")
+            del config['logo']
 
-    with open(CONFIG_FILE, 'w', encoding='UTF-8') as f:
-        json.dump(config, f)
+        if 'sheetsCreds' in config:
+            print(f"Saving sheetsCreds to _internal folder")
+            sheets_creds_data = config['sheetsCreds'].split(',')[1]
+            sheets_creds_bytes = base64.b64decode(sheets_creds_data)
+            new_sheets_creds_path = os.path.join('_internal', 'sheetsCreds.json')
+            with open(new_sheets_creds_path, 'wb') as f:
+                f.write(sheets_creds_bytes)
+            del config['sheetsCreds']
+
+        print(f"Saving config: {config}")
+        with open(CONFIG_FILE, 'w', encoding='UTF-8') as f:
+            json.dump(config, f)
+
+        return "Config saved successfully!"
+    except Exception as e:
+        return f"Failed to save config: {str(e)}"
 
 @eel.expose
 def load_config():
@@ -300,12 +333,13 @@ def load_config():
         return {
             "printerIP": "192.168.1.55",
             "shopName": "Grannysaidso",
-            "phoneNumber": "064-241-5696",
-            "lineAccount": "@grannysaidso",
+            "shopPhone": "064-241-5696",
+            "shopLine": "@grannysaidso",
             "qrText": "Scan here to pay",
             "qrCodeType": "phone",
             "qrCodeValue": "0000000000",
-            "thankYouMessage": "Thank you for always saving room for dessert!"
+            "thankYouMessage": "Thank you for always saving room for dessert!",
+            "sheetName": "GrannySaidso Database"
         }
     
 @eel.expose
@@ -313,7 +347,7 @@ def test_print(printerIP):
     """Print a test message and cut the paper."""
     try:
         p = Network(printerIP)
-        p.text("Test print successful!\n")
+        p.text("Test print successful!\n\n")
         p.cut()
         return "Test print successful!"
     except OSError as e:
@@ -323,8 +357,6 @@ def test_print(printerIP):
             return f"Failed to print: {str(e)}"
     except Exception as e:
         return f"Failed to print: {str(e)}"
-    
-    return "Success"
 
 @eel.expose
 def print_receipt(items, quantities, prices, customer_name):
@@ -333,7 +365,7 @@ def print_receipt(items, quantities, prices, customer_name):
     try:
         with open(CONFIG_FILE, 'r') as f:
             config = json.load(f)
-            printer_ip = Network(config['printerIP'])
+            printer_ip = config['printerIP']
             shop_name = config['shopName']
             shop_phone = config['shopPhone']
             shop_line = config['shopLine']
@@ -344,6 +376,15 @@ def print_receipt(items, quantities, prices, customer_name):
     except Exception as e:
         print(f"Failed to read config file: {str(e)}")
         return f"Failed to read config file: {str(e)}"
+    
+    print(f"Printer IP: {printer_ip}")
+    print(f"Shop Name: {shop_name}")
+    print(f"Shop Phone: {shop_phone}")
+    print(f"Shop Line: {shop_line}")
+    print(f"QR Text: {qr_text}")
+    print(f"QR Code Type: {qr_code_type}")
+    print(f"QR Code Value: {qr_code_value}")
+    print(f"Thank You Message: {thank_you_message}")
 
     try:
         printer = Network(printer_ip)
@@ -394,6 +435,9 @@ def print_receipt(items, quantities, prices, customer_name):
         printer.text(datetime.now().strftime("%d/%m/%Y, %H:%M\n"))
 
         printer.cut()
+
+        print("Printing receipt... Done!")
+        return "Print successful!"
     except OSError as e:
         if '10057' in str(e):
             return "Failed to print: The printer is not connected."
@@ -402,9 +446,6 @@ def print_receipt(items, quantities, prices, customer_name):
     except Exception as e:
         print(f"Failed to print: {str(e)}")
         return f"Failed to print: {str(e)}"
-    
-    print("Printing receipt... Done!")
-    return "Success"
 
 def calculated_total(prices, quantities):
     total_price = 0

@@ -147,11 +147,9 @@ async function printReceipt(customer_name, items, quantities, prices) {
         const quantityList = quantities.split(',').map(qty => qty.trim());
         const priceList = prices.split(',').map(price => price.trim());
 
-        var result = await eel.print_receipt(itemList, quantityList, priceList, customer_name);
-        
-        if (result !== "success") {
-            showAlertModal(result);
-        }
+        var result = await eel.print_receipt(itemList, quantityList, priceList, customer_name)();
+
+        showAlertModal(result);
     } catch (e) {
 		showAlertModal(e);
 	} finally {

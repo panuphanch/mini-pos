@@ -13,22 +13,35 @@ async function saveConfig() {
         });
     }
 
+	var sheetsCredsFile = document.getElementById('sheetsCreds').files[0];
+    var sheetsCredsBlob = await new Promise((resolve) => {
+        var reader = new FileReader();
+        reader.onloadend = function() {
+            resolve(reader.result);
+        }
+        reader.readAsDataURL(sheetsCredsFile);
+    });
+
 	var config = {
 		printerIP: document.getElementById('printerIP').value,
-        logo: logoBase64,
 		shopName: document.getElementById('shopName').value,
-		phoneNumber: document.getElementById('phoneNumber').value,
-		lineAccount: document.getElementById('lineAccount').value,
+		shopPhone: document.getElementById('shopPhone').value,
+		shopLine: document.getElementById('shopLine').value,
 		qrText: document.getElementById('qrText').value,
 		qrCodeType: document.querySelector('input[name="qrCode"]:checked').value, // This gets the value of the selected radio button
 		qrCodeValue: document.getElementById('qrValue').value,
-		thankYouMessage: document.getElementById('thankYouMessage').value
+		thankYouMessage: document.getElementById('thankYouMessage').value,
+        logo: logoBase64,
+		sheetName: document.getElementById('sheetName').value,
+        sheetsCreds: sheetsCredsBlob
 	};
 
 	// Pass config to eel backend
-	await eel.save_config(config)();
+	var result = await eel.save_config(config)();
 
 	refreshLogo();
+
+	showAlertModal(result);
 }
 
 async function loadConfig() {
@@ -36,12 +49,13 @@ async function loadConfig() {
 
 	document.getElementById('printerIP').value = config.printerIP;
 	document.getElementById('shopName').value = config.shopName;
-	document.getElementById('phoneNumber').value = config.phoneNumber;
-	document.getElementById('lineAccount').value = config.lineAccount;
+	document.getElementById('shopPhone').value = config.shopPhone;
+	document.getElementById('shopLine').value = config.shopLine;
 	document.getElementById('qrText').value = config.qrText;
 	document.querySelector(`input[name="qrCode"][value="${config.qrCodeType}"]`).checked = true; // This sets the selected radio button
 	document.getElementById('qrValue').value = config.qrCodeValue;
 	document.getElementById('thankYouMessage').value = config.thankYouMessage;
+	document.getElementById('sheetName').value = config.sheetName;
 }
 
 async function testPrint() {
@@ -53,9 +67,28 @@ async function testPrint() {
 		var printerIP = document.getElementById('printerIP').value;
 		var result = await eel.test_print(printerIP)();
 
-		if (result !== "success") {
-			showAlertModal(result);
-		}
+		showAlertModal(result);
+	} catch (e) {
+		showAlertModal(e);
+	} finally {
+		spinnerWrapperEl.style.opacity = 0;
+
+		setTimeout(() => {
+			spinnerWrapperEl.style.display = 'none';			
+		}, 200);
+	}
+}
+
+async function testSheetConnection() {
+	const spinnerWrapperEl = document.querySelector('.spinner-wrapper');
+	const sheetName = document.getElementById('sheetName').value;
+
+	try {
+		spinnerWrapperEl.style.opacity = 0.5;
+		spinnerWrapperEl.style.display = 'flex';
+		var result = await eel.test_sheets(sheetName)();
+
+		showAlertModal(result);
 	} catch (e) {
 		showAlertModal(e);
 	} finally {

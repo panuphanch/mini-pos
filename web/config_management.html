@@ -11,6 +11,22 @@
 			<input type="text" class="form-control" id="printerIP">
 			<button class="btn btn-primary" onclick="testPrint()">Test Print</button>
 		</div>
+
+		<div class="row">
+			<div class="form-group col-6">
+				<label for="sheetName" class="form-label fw-bold">Sheet Name</label>
+				<div class="input-group">
+					<input type="text" class="form-control" id="sheetName">
+					<button class="btn btn-primary" onclick="testSheetConnection()">Validate</button>
+				</div>
+			</div>
+			
+			<div class="form-group col-6">
+				<label for="sheetsCreds" class="form-label fw-bold">Sheets Credentials File</label>
+				<input type="file" class="form-control" id="sheetsCreds">
+			</div>
+		</div>
+
 		
 		<div class="form-group">
 			<label for="logoUpload" class="form-label fw-bold">Logo</label><span class="pl-2 text-muted fs-8" style="font-size: 10px;">Default resolution: 250x250 (to fit into receipt)</span>
@@ -25,13 +41,13 @@
 
 		<div class="row">
 			<div class="form-group col-6">
-				<label for="phoneNumber" class="form-label fw-bold">Phone Number</label>
-				<input type="text" class="form-control" id="phoneNumber" value="064-241-5696">
+				<label for="shopPhone" class="form-label fw-bold">Phone Number</label>
+				<input type="text" class="form-control" id="shopPhone" value="064-241-5696">
 			</div>
 	
 			<div class="form-group col-6">
-				<label for="lineAccount" class="form-label fw-bold">Line Account</label>
-				<input type="text" class="form-control" id="lineAccount" value="@grannysaidso">
+				<label for="shopLine" class="form-label fw-bold">Line Account</label>
+				<input type="text" class="form-control" id="shopLine" value="@grannysaidso">
 			</div>
 		</div>
 
