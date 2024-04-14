@@ -24,13 +24,13 @@ jobs:
         pip install -r requirement.txt
     - name: Build Application
       run: |
-        python -m eel main.py web --add-data "_internal/*:." --add-data "static/*:." --onefile --noconsole
+        python -m eel mini-pos.py web --add-data "_internal/*:." --add-data "static/*:." --onefile --noconsole
       shell: bash
     - name: Upload Artifact
       uses: actions/upload-artifact@v2
       with:
-        name: myapp-${{ runner.os }}
-        path: dist/main.exe
+        name: mini-pos-${{ runner.os }}
+        path: dist/mini-pos*
   
   release:
     needs: build
@@ -39,11 +39,11 @@ jobs:
     - name: Download Artifacts
       uses: actions/download-artifact@v2
       with:
-        name: myapp-windows-latest
+        name: mini-pos-windows-latest
         path: dist/
     - uses: actions/download-artifact@v2
       with:
-        name: myapp-macos-latest
+        name: mini-pos-macos-latest
         path: dist/
 
     - name: Create Release
@@ -59,12 +59,12 @@ jobs:
       uses: actions/upload-release-asset@v1
       with:
         upload_url: ${{ steps.create_release.outputs.upload_url }}
-        asset_path: ./dist/myapp-windows-latest
-        asset_name: myapp-windows-latest
+        asset_path: ./dist
+        asset_name: mini-pos
         asset_content_type: application/octet-stream
     - uses: actions/upload-release-asset@v1
       with:
         upload_url: ${{ steps.create_release.outputs.upload_url }}
-        asset_path: ./dist/myapp-macos-latest
-        asset_name: myapp-macos-latest
+        asset_path: ./dist
+        asset_name: mini-pos.exe
         asset_content_type: application/octet-stream
