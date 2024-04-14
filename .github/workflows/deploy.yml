@@ -1,0 +1,70 @@
+name: Build and Package
+
+on:
+  workflow_dispatch:
+
+jobs:
+  build:
+
+    runs-on: ${{ matrix.os }}
+    strategy:
+      matrix:
+        os: [windows-latest, macos-latest]
+        python-version: [3.8]
+
+    steps:
+    - uses: actions/checkout@v2
+    - name: Set up Python ${{ matrix.python-version }}
+      uses: actions/setup-python@v2
+      with:
+        python-version: ${{ matrix.python-version }}
+    - name: Install dependencies
+      run: |
+        python -m pip install --upgrade pip
+        pip install -r requirements.txt
+    - name: Build Application
+      run: |
+        python -m eel main.py web --add-data "_internal/*;." --add-data "static/*;."
+      shell: bash
+    - name: Upload Artifact
+      uses: actions/upload-artifact@v2
+      with:
+        name: myapp-${{ runner.os }}
+        path: dist/myapp*
+  
+  release:
+    needs: build
+    runs-on: ubuntu-latest
+    steps:
+    - name: Download Artifacts
+      uses: actions/download-artifact@v2
+      with:
+        name: myapp-windows-latest
+        path: dist/
+    - uses: actions/download-artifact@v2
+      with:
+        name: myapp-macos-latest
+        path: dist/
+
+    - name: Create Release
+      id: create_release
+      uses: actions/create-release@v1
+      with:
+        tag_name: ${{ github.ref }}
+        release_name: Release ${{ github.ref }}
+        draft: false
+        prerelease: false
+
+    - name: Upload Release Asset
+      uses: actions/upload-release-asset@v1
+      with:
+        upload_url: ${{ steps.create_release.outputs.upload_url }}
+        asset_path: ./dist/myapp-windows-latest
+        asset_name: myapp-windows-latest
+        asset_content_type: application/octet-stream
+    - uses: actions/upload-release-asset@v1
+      with:
+        upload_url: ${{ steps.create_release.outputs.upload_url }}
+        asset_path: ./dist/myapp-macos-latest
+        asset_name: myapp-macos-latest
+        asset_content_type: application/octet-stream
