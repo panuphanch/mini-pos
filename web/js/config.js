@@ -14,13 +14,16 @@ async function saveConfig() {
     }
 
 	var sheetsCredsFile = document.getElementById('sheetsCreds').files[0];
-    var sheetsCredsBlob = await new Promise((resolve) => {
-        var reader = new FileReader();
-        reader.onloadend = function() {
-            resolve(reader.result);
-        }
-        reader.readAsDataURL(sheetsCredsFile);
-    });
+	var sheetsCredsBlob = null;
+	if (sheetsCredsFile) {
+		sheetsCredsBlob = await new Promise((resolve) => {
+			var reader = new FileReader();
+			reader.onloadend = function() {
+				resolve(reader.result);
+			}
+			reader.readAsDataURL(sheetsCredsFile);
+		});
+	}
 
 	var config = {
 		printerIP: document.getElementById('printerIP').value,

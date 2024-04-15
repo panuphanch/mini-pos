@@ -1,4 +1,4 @@
-import eel, csv, os, gspread, io, json, base64, shutil
+import eel, csv, os, gspread, io, json, base64, shutil, sys, ctypes
 from escpos.printer import Network
 from datetime import datetime
 from _internal.promptpay import generate_promptpay_qr
@@ -6,14 +6,38 @@ from oauth2client.service_account import ServiceAccountCredentials
 from PIL import Image
 import pandas as pd
 
+PERSISTENT_DIR = os.path.expanduser('~/.mini-pos')
+os.makedirs(PERSISTENT_DIR, exist_ok=True)
+
+def resource_path(relative_path):
+    """ Get absolute path to resource, works for dev and for PyInstaller """
+    base_path = getattr(sys, '_MEIPASS', os.path.dirname(os.path.abspath(__file__)))
+    return os.path.join(base_path, relative_path)
+
 PRODUCT_COLUMNS = ['id', 'name', 'price']
-PRODUCTS_FILE = 'static/products.csv'
 ORDER_COLUMNS = ['date', 'customer_name', 'items', 'quantities', 'prices', 'total']
-ORDERS_FILE = 'static/orders.csv'
-SHEETS_CREDS = '_internal/sheetsCreds.json'
-CONFIG_FILE = 'static/config.json'
+
+PRODUCTS_FILE = os.path.join(PERSISTENT_DIR, 'products.csv')
+ORDERS_FILE = os.path.join(PERSISTENT_DIR, 'orders.csv')
+CONFIG_FILE = os.path.join(PERSISTENT_DIR, 'config.json')
+SHEETS_CREDS = os.path.join(PERSISTENT_DIR, 'sheetsCreds.json')
+
+STATIC_DIR = os.path.join(os.path.dirname(os.path.abspath(__file__)), 'static')
+
+if not os.path.exists(PRODUCTS_FILE):
+    shutil.copy2(os.path.join(STATIC_DIR, 'products.csv'), PRODUCTS_FILE)
+if not os.path.exists(ORDERS_FILE):
+    shutil.copy2(os.path.join(STATIC_DIR, 'orders.csv'), ORDERS_FILE)
+if not os.path.exists(CONFIG_FILE):
+    shutil.copy2(os.path.join(STATIC_DIR, 'config.json'), CONFIG_FILE)
+
+def hideConsole():
+  whnd = ctypes.windll.kernel32.GetConsoleWindow()
+  if whnd != 0:
+     ctypes.windll.user32.ShowWindow(whnd, 0)
 
 eel.init('web')
+hideConsole()
 
 @eel.expose
 def load_products():
@@ -286,9 +310,12 @@ def delete_order(date, customer_name):
     except Exception as e:
         print(f"Failed to delete order: {str(e)}")
 
+def get_image_path():
+    return resource_path(os.path.join('web', 'images', 'logo.png'))
+
 def get_image():
-    image_path = os.path.join('web', 'images', 'logo.png') 
-    with open(image_path, 'rb') as f:
+    image_path = get_image_path()
+    with open(resource_path(image_path), 'rb') as f:
         image_data = f.read()
 
     return Image.open(io.BytesIO(image_data))
@@ -303,17 +330,17 @@ def save_config(config):
                 image = Image.open(io.BytesIO(logo_bytes))
                 max_size = (250, 250)
                 image.thumbnail(max_size)
-                image_path = os.path.join('web', 'images', 'logo.png')
+                image_path = get_image_path()
                 image.save(image_path, "PNG")
             del config['logo']
 
         if 'sheetsCreds' in config:
-            print(f"Saving sheetsCreds to _internal folder")
-            sheets_creds_data = config['sheetsCreds'].split(',')[1]
-            sheets_creds_bytes = base64.b64decode(sheets_creds_data)
-            new_sheets_creds_path = os.path.join('_internal', 'sheetsCreds.json')
-            with open(new_sheets_creds_path, 'wb') as f:
-                f.write(sheets_creds_bytes)
+            if config['sheetsCreds']:
+                print(f"Saving sheetsCreds to _internal folder")
+                sheets_creds_data = config['sheetsCreds'].split(',')[1]
+                sheets_creds_bytes = base64.b64decode(sheets_creds_data)
+                with open(SHEETS_CREDS, 'wb') as f:
+                    f.write(sheets_creds_bytes)
             del config['sheetsCreds']
 
         print(f"Saving config: {config}")

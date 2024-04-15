@@ -24,7 +24,7 @@ jobs:
         pip install -r requirement.txt
     - name: Build Application
       run: |
-        python -m eel mini-pos.py web --add-data "_internal/*:." --add-data "static/*:." --onefile --noconsole
+        python -m eel mini-pos.py web --add-data "_internal:_internal" --add-data "static:static" --onefile
       shell: bash
     - name: Upload Artifact
       uses: actions/upload-artifact@v2
