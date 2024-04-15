@@ -143,6 +143,9 @@ async function printReceipt(customer_name, items, quantities, prices) {
     const spinnerWrapperEl = document.querySelector('.spinner-wrapper');
 
 	try {
+        spinnerWrapperEl.style.opacity = 0.5;
+		spinnerWrapperEl.style.display = 'flex';
+        
         const itemList = items.split(',').map(item => item.trim());
         const quantityList = quantities.split(',').map(qty => qty.trim());
         const priceList = prices.split(',').map(price => price.trim());
