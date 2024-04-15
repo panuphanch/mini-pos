@@ -47,6 +47,12 @@ jobs:
       with:
         name: mini-pos-macOS
         path: dist/
+    
+    - name: Bump version and push tag
+      id: tag_version
+      uses: mathieudutour/github-tag-action@v5.6
+      with:
+        github_token: ${{ secrets.GITHUB_TOKEN }}
 
     - name: Create Release
       id: create_release
@@ -54,8 +60,8 @@ jobs:
       env:
         GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
       with:
-        tag_name: ${{ github.ref_name }}
-        release_name: Release ${{ github.ref_name }}
+        tag_name: ${{ steps.tag_version.outputs.new_tag }}
+        release_name: Release ${{ steps.tag_version.outputs.new_tag }}
         draft: false
         prerelease: false
 
@@ -65,12 +71,14 @@ jobs:
         GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
       with:
         upload_url: ${{ steps.create_release.outputs.upload_url }}
-        asset_path: ./dist
-        asset_name: mini-pos
+        asset_path: ./dist/mini-pos
+        asset_name: mini-pos-osx
         asset_content_type: application/octet-stream
     - uses: actions/upload-release-asset@v1
+      env:
+        GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
       with:
         upload_url: ${{ steps.create_release.outputs.upload_url }}
-        asset_path: ./dist
-        asset_name: mini-pos.exe
+        asset_path: ./dist/mini-pos.exe
+        asset_name: mini-pos-win.exe
         asset_content_type: application/octet-stream
