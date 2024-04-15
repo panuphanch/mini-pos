@@ -10,3 +10,4 @@ Eel.egg-info
 venv/
 .tox
 _internal/*.json
+**/*.spec
