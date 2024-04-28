@@ -270,7 +270,12 @@ def load_orders():
             csv_reader = csv.reader(csv_file)
             header = next(csv_reader)
             for row in csv_reader:
-                orders.append([column.replace("|", ", ") for column in row])
+                items = row[2].split('|')
+                print(row[3])
+                quantities = list(map(int, row[3].split('|')))
+                prices = list(map(float, row[4].split('|')))
+                total = sum(q * p for q, p in zip(quantities, prices))
+                orders.append([column.replace("|", ", ") for column in row[:-1]] + [f"{total:.2f}"])
     orders.sort(key=lambda x: datetime.strptime(x[0], "%d/%m/%Y %H:%M"), reverse=True)
     return orders
 
