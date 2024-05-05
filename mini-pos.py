@@ -295,15 +295,16 @@ def save_order(items, quantities, prices, customer_name):
         if not os.path.exists(ORDERS_FILE):
             writer.writerow(['date', 'customer', 'items', 'amounts', 'prices', 'total'])
         
-        order_data = [
-                datetime.now().strftime("%d/%m/%Y %H:%M"),
+        date_now = datetime.now().strftime("%d/%m/%Y %H:%M")
+        for item, quantity, price in zip(items, quantities, prices):
+            order_data = [
+                date_now,
                 customer_name,
-                '|'.join(items),
-                '|'.join(quantities),
-                '|'.join(prices),
-                f"{total_price:.2f}"
+                item,
+                quantity,
+                price
             ]
-        writer.writerow(order_data)
+            writer.writerow(order_data)
 
 @eel.expose
 def delete_order(date, customer_name):
