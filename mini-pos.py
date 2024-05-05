@@ -286,24 +286,36 @@ def load_orders():
     orders = []
     for key, values in orders_dict.items():
         date, customer_name = key
-        items = "|".join(value[0] for value in values)
-        quantities = "|".join(value[1] for value in values)
-        prices = "|".join(value[2] for value in values)
-        total = calculated_total(prices.split('|'), quantities.split('|'))
-        orders.append([date, customer_name, items, quantities, prices, f"{total:.2f}"])
+        items = "|".join(value[0] for value in values if value[0] != 'discount' and value[0] != 'delivery_fee')
+        quantities = "|".join(value[1] for value in values if value[0] != 'discount' and value[0] != 'delivery_fee')
+        prices = "|".join(value[2] for value in values if value[0] != 'discount' and value[0] != 'delivery_fee')
+        total_withou_addition = calculated_total(prices.split('|'), quantities.split('|'))
+        discounts = [(value[1], value[2]) for value in values if value[0] == 'discount']
+        discount = 0
+        total_discount = 0
+        discount_type = 'none'
+        if discounts and discounts[0][0] == 'percentage':
+            discount = float(discounts[0][1])
+            total_discount = float(discounts[0][1]) * total_withou_addition / 100
+            discount_type = 'percentage'
+        elif discounts and discounts[0][0] == 'amount':
+            discount = float(discounts[0][1])
+            total_discount = float(discounts[0][1])
+            discount_type = 'amount'
+        delivery_fee = sum(float(value[2]) for value in values if value[0] == 'delivery_fee')
+        total = total_withou_addition - discount + delivery_fee
+        orders.append([date, customer_name, items, quantities, prices, discount_type, f"{discount:.2f}", f"{total_discount:.2f}", f"{delivery_fee:.2f}", f"{total:.2f}"])
     
     orders.sort(key=lambda x: datetime.strptime(x[0], "%d/%m/%Y %H:%M"), reverse=True)
     return orders
 
 @eel.expose
-def save_order(items, quantities, prices, customer_name):
-    total_price = calculated_total(prices, quantities)
-    
+def save_order(items, quantities, prices, customer_name, discount_type, discount, delivery_fee):    
     with open(ORDERS_FILE, 'a', newline='', encoding='UTF-8') as csv_file:
         writer = csv.writer(csv_file)
 
         if not os.path.exists(ORDERS_FILE):
-            writer.writerow(['date', 'customer', 'items', 'amounts', 'prices', 'total'])
+            writer.writerow(ORDER_COLUMNS)
         
         date_now = datetime.now().strftime("%d/%m/%Y %H:%M")
         for item, quantity, price in zip(items, quantities, prices):
@@ -315,6 +327,25 @@ def save_order(items, quantities, prices, customer_name):
                 price
             ]
             writer.writerow(order_data)
+
+        # Wrtie discount transaction
+        writer.writerow([
+            date_now,
+            customer_name,
+            "discount",
+            discount_type,
+            discount
+        ])
+
+        # Wrtie delivery fee transaction
+        if delivery_fee and float(delivery_fee) > 0:
+            writer.writerow([
+                date_now,
+                customer_name,
+                "delivery_fee",
+                "1",
+                delivery_fee
+            ])
 
 @eel.expose
 def delete_order(date, customer_name):
@@ -408,7 +439,7 @@ def test_print(printerIP):
         return f"Failed to print: {str(e)}"
 
 @eel.expose
-def print_receipt(items, quantities, prices, customer_name):
+def print_receipt(items, quantities, prices, customer_name, discount_type, discount, delivery_fee):
     print("Printing receipt...")
 
     try:
@@ -446,41 +477,60 @@ def print_receipt(items, quantities, prices, customer_name):
         # Logo
         printer.set(align='center')
         printer.image(get_image())
-        printer.text("------------------------------------------------\n")
+        printer.set(align='left')
+        printer.text("-----------------------------------------------\n")
 
         printer.set(align='center')
         printer.text(f'{shop_name}\n')
         printer.text(f'{shop_phone}\n')
         printer.text(f'Line {shop_line}\n')
-        printer.text("------------------------------------------------\n")
+        printer.set(align='left')
+        printer.text("-----------------------------------------------\n")
 
         printer.set(align='left')
         printer.text(f"Customer: {customer_name}\n")
-        printer.text("------------------------------------------------\n")
+        printer.text("-----------------------------------------------\n")
 
+        left_justify = 40
         printer.set(align='left')
         for item, quantity, price in zip(items, quantities, prices):
             quantity = float(quantity)  # Parse quantity to float
             price = float(price)        # Parse price to float
 
             item_total_price = quantity * price
-            printer.text(f"{item}".ljust(40) + f"฿{item_total_price:.2f}\n")
+            printer.text(f"{item}".ljust(left_justify) + f"฿{item_total_price:.2f}\n")
             printer.text(f"{quantity} x ฿{price:.2f}\n\n")
-        printer.text("------------------------------------------------\n")
+        printer.text("-----------------------------------------------\n")
+
+        if discount_type != 'none':
+            printer.set(align='left')
+            if discount_type == 'percentage':
+                discount_text = f"{float(discount):.2f}%"
+                discount = float(discount) * total_price / 100
+                total_price = total_price - discount
+            else:
+                total_price = total_price - float(discount)
+                discount_text = f"฿{float(discount):.2f}"
+            printer.text(f"Discount ({discount_text})".ljust(left_justify) + f"฿{float(discount):.2f}\n")
+
+        if float(delivery_fee) > 0:
+            total_price = total_price + float(delivery_fee)
+            printer.set(align='left')
+            printer.text(f"Delivery fee".ljust(left_justify) + f"฿{float(delivery_fee):.2f}\n")
 
         printer.set(align='left', text_type='B')
-        printer.text("Amount due".ljust(40) + f"฿{total_price:.2f}\n\n")
-        printer.text("------------------------------------------------\n")
+        printer.text("Amount due".ljust(left_justify) + f"฿{total_price:.2f}\n\n")
+        printer.text("-----------------------------------------------\n")
 
         qr_payload = generate_promptpay_qr(qr_code_type, qr_code_value, total_price)
         printer.set(align='center')
         printer.text(f"{qr_text}\n")
         printer.qr(qr_payload, size=7)
-        printer.text("------------------------------------------------\n")
+        printer.set(align='left')
+        printer.text("-----------------------------------------------\n")
 
         printer.set(align='center')
         printer.text(f"{thank_you_message}\n")
-        printer.set(align='left')
         printer.text(datetime.now().strftime("%d/%m/%Y, %H:%M\n"))
 
         printer.cut()
@@ -502,4 +552,4 @@ def calculated_total(prices, quantities):
         total_price += float(price) * int(quantity)
     return total_price
 
-eel.start('index.html', size=(1200, 900)) # , mode='edge') ## add mode if chrome not available
+eel.start('index.html', size=(1400, 900)) # , mode='edge') ## add mode if chrome not available
