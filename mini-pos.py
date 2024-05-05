@@ -16,7 +16,7 @@ def resource_path(relative_path):
     return os.path.join(base_path, relative_path)
 
 PRODUCT_COLUMNS = ['id', 'name', 'price']
-ORDER_COLUMNS = ['date', 'customer_name', 'items', 'quantities', 'prices', 'total']
+ORDER_COLUMNS = ['date', 'customer_name', 'items', 'quantities', 'prices']
 
 PRODUCTS_FILE = os.path.join(PERSISTENT_DIR, 'products.csv')
 ORDERS_FILE = os.path.join(PERSISTENT_DIR, 'orders.csv')
@@ -179,14 +179,18 @@ def sync_orders_to_google_sheet():
     print("Syncing orders to Google Sheets...")
 
     worksheet = get_google_sheet(1)
-
-    # Get data from the Google Sheet
     google_sheet_data = worksheet.get_all_values()
     google_sheet_df = pd.DataFrame(google_sheet_data[1:])
     if not google_sheet_df.empty:
         google_sheet_df.columns = ORDER_COLUMNS
+    else:
+        google_sheet_df = pd.DataFrame(columns=ORDER_COLUMNS)
+    google_sheet_df['date'] = pd.to_datetime(google_sheet_df['date'], format="%d/%m/%Y %H:%M")
+    google_sheet_df['customer_name'] = google_sheet_df['customer_name'].astype('str')
+    google_sheet_df['items'] = google_sheet_df['items'].astype('str')
+    google_sheet_df['quantities'] = google_sheet_df['quantities'].astype('str')
+    google_sheet_df['prices'] = google_sheet_df['prices'].astype('str')
 
-    # Get data from the local CSV file
     try:
         local_csv_df = pd.read_csv(ORDERS_FILE)
     except pd.errors.EmptyDataError:
@@ -195,41 +199,47 @@ def sync_orders_to_google_sheet():
             writer = csv.writer(file)
             writer.writerow(ORDER_COLUMNS)
         local_csv_df = pd.DataFrame()
+
     if not local_csv_df.empty:
         local_csv_df.columns = ORDER_COLUMNS
-
-    # If both data sources are empty, exit the function
-    if google_sheet_df.empty and local_csv_df.empty:
-        print("Both data sources are empty.")
-        return
-
-    # Find the data that's in the local CSV file but not in the Google Sheet
-    if google_sheet_df.empty:
-        new_data_for_google_sheet = local_csv_df
-    elif google_sheet_df.empty and not local_csv_df.empty:
-        new_data_for_google_sheet = local_csv_df[~local_csv_df[['date', 'customer_name']]
-                                                .apply(tuple, 1)
-                                                .isin(google_sheet_df[['date', 'customer_name']]
-                                                    .apply(tuple, 1))]
     else:
-        new_data_for_google_sheet = pd.DataFrame()
+        local_csv_df = pd.DataFrame(columns=ORDER_COLUMNS)
+    local_csv_df['date'] = pd.to_datetime(local_csv_df['date'], format="%d/%m/%Y %H:%M")
+    local_csv_df['customer_name'] = local_csv_df['customer_name'].astype('str')
+    local_csv_df['items'] = local_csv_df['items'].astype('str')
+    local_csv_df['quantities'] = local_csv_df['quantities'].astype('str')
+    local_csv_df['prices'] = local_csv_df['prices'].astype('str')
 
-    # Append the new data to the Google Sheet
-    for index, row in new_data_for_google_sheet.iterrows():
-        worksheet.append_row(row.tolist())
+    merged_df = pd.merge(local_csv_df, google_sheet_df, how='outer', on=ORDER_COLUMNS, indicator=True)
 
-    # Find the data that's in the Google Sheet but not in the local CSV file
-    if local_csv_df.empty and not google_sheet_df.empty:
-        new_data_for_local_csv = google_sheet_df
-    elif google_sheet_df.empty:
-        new_data_for_local_csv = pd.DataFrame()
-    else:
-        new_data_for_local_csv = google_sheet_df[~google_sheet_df[['date', 'customer_name']]
-                                            .apply(tuple, 1).isin(local_csv_df[['date', 'customer_name']]
-                                                                .apply(tuple, 1))]
+    only_in_local = merged_df[merged_df['_merge'] == 'left_only']
+    only_in_local = only_in_local.drop(columns=['_merge'])
+    only_in_google_sheet = merged_df[merged_df['_merge'] == 'right_only']
+    only_in_google_sheet = only_in_google_sheet.drop(columns=['_merge'])
 
-    # Append the new data to the local CSV file
-    new_data_for_local_csv.to_csv(ORDERS_FILE, mode='a', header=False, index=False)
+    google_sheet_df = pd.concat([google_sheet_df, only_in_local], ignore_index=True)
+    google_sheet_df = google_sheet_df.sort_values('date')
+    google_sheet_df['date'] = google_sheet_df['date'].dt.strftime("%d/%m/%Y %H:%M")
+
+    local_csv_df = pd.concat([local_csv_df, only_in_google_sheet], ignore_index=True)
+    local_csv_df = local_csv_df.sort_values('date')
+    local_csv_df['date'] = local_csv_df['date'].dt.strftime("%d/%m/%Y %H:%M")
+
+    if not google_sheet_df.empty:
+        worksheet.clear()
+        # Convert the DataFrame to a list of lists and prepend the columns
+        rows = [ORDER_COLUMNS] + google_sheet_df.values.tolist()
+        # Use the append_rows method to append all rows at once
+        worksheet.append_rows(rows)
+
+    if not local_csv_df.empty:
+        with open(ORDERS_FILE, 'w', newline='', encoding='utf-8') as file:
+            writer = csv.writer(file)
+            writer.writerow(ORDER_COLUMNS)
+            for index, row in local_csv_df.iterrows():
+                writer.writerow(row.tolist())
+
+    print("Syncing orders to Google Sheets... Done!")
 
 @eel.expose
 def edit_product(product_id, new_name, new_price):
