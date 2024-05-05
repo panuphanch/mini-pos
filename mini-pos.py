@@ -4,6 +4,7 @@ from datetime import datetime
 from _internal.promptpay import generate_promptpay_qr
 from oauth2client.service_account import ServiceAccountCredentials
 from PIL import Image
+from collections import defaultdict
 import pandas as pd
 
 PERSISTENT_DIR = os.path.expanduser('~/.mini-pos')
@@ -261,21 +262,26 @@ def delete_product(product_id):
             row[0] = str(i)
             writer.writerow(row)
 
-
 @eel.expose
 def load_orders():
-    orders = []
+    orders_dict = defaultdict(list)
     if os.path.exists(ORDERS_FILE):
         with open(ORDERS_FILE, 'r', encoding='UTF-8') as csv_file:
             csv_reader = csv.reader(csv_file)
             header = next(csv_reader)
             for row in csv_reader:
-                items = row[2].split('|')
-                print(row[3])
-                quantities = list(map(int, row[3].split('|')))
-                prices = list(map(float, row[4].split('|')))
-                total = sum(q * p for q, p in zip(quantities, prices))
-                orders.append([column.replace("|", ", ") for column in row[:-1]] + [f"{total:.2f}"])
+                date, customer_name, item, quantity, price = row
+                orders_dict[(date, customer_name)].append([item, quantity, price])
+    
+    orders = []
+    for key, values in orders_dict.items():
+        date, customer_name = key
+        items = "|".join(value[0] for value in values)
+        quantities = "|".join(value[1] for value in values)
+        prices = "|".join(value[2] for value in values)
+        total = calculated_total(prices.split('|'), quantities.split('|'))
+        orders.append([date, customer_name, items, quantities, prices, f"{total:.2f}"])
+    
     orders.sort(key=lambda x: datetime.strptime(x[0], "%d/%m/%Y %H:%M"), reverse=True)
     return orders
 
