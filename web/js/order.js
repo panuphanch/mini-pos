@@ -56,10 +56,13 @@ function addItemRow(item = "", price = "") {
 async function saveOrder(event) {
     event.preventDefault();
 
-    let customer_name = document.querySelector('.customer').value;
+    let customerName = document.querySelector('.customer').value;
     let productElements = document.querySelectorAll('.product');
     let quantityElements = document.querySelectorAll('.quantity');
     let priceElements = document.querySelectorAll('.price');
+    let discountType = document.getElementById('discountType').value;
+    let discount = document.getElementById('discountInput').value;
+    let deliveryFee = document.getElementById('deliveryFee').value;
 
     if (productElements.length === 0) {
         showAlertModal('Please add at least one product.');
@@ -70,7 +73,7 @@ async function saveOrder(event) {
     let quantities = Array.from(quantityElements).map(el => el.value);
     let prices = Array.from(priceElements).map(el => el.value);
 
-    await eel.save_order(products, quantities, prices, customer_name)();
+    await eel.save_order(products, quantities, prices, customerName, discountType, discount, deliveryFee)();
     displayOrders();
 }
 
@@ -87,11 +90,11 @@ async function displayOrders() {
         let dateCell = row.insertCell();
         let customerCell = row.insertCell();
         let itemsCell = row.insertCell();
+        let discountCell = row.insertCell();
+        let deliveryFeeCell = row.insertCell();
         let totalCell = row.insertCell();
-        let printCell = row.insertCell();
-        printCell.classList.add('text-center');
-        let deleteCell = row.insertCell();
-        deleteCell.classList.add('text-center');
+        let actionCell = row.insertCell();
+        actionCell.classList.add('text-center');
 
         let items = order[2].split('|');
         let quantities = order[3].split('|');
@@ -107,26 +110,33 @@ async function displayOrders() {
         dateCell.textContent = order[0];
         customerCell.textContent = order[1];
         itemsCell.innerHTML = itemsHtml;
-        totalCell.textContent = "฿" + order[5];
+        discountCell.textContent = order[7];
+        deliveryFeeCell.textContent = order[8];
+        totalCell.textContent = "฿" + order[9];
 
         let orderID = order[0].replace(/'/g, "\\'");
         let customerName = order[1].replace(/'/g, "\\'");
         let orderItem = order[2].replace(/'/g, "\\'");
         let orderQuantity = order[3].replace(/'/g, "\\'");
         let orderPrice = order[4].replace(/'/g, "\\'");
+        let discountType = order[5];
+        let discount = order[6];
+        let deliveryFee = order[8];
 
-        printCell.innerHTML = `
-            <button class="btn btn-secondary" onclick="printReceipt('${customerName}', '${orderItem}', '${orderQuantity}', '${orderPrice}')">
-                Print
-            </button>
-        `;
-
-        deleteCell.innerHTML = `
-            <button class="btn" onclick="deleteOrder('${orderID}', '${customerName}')">
-                <svg xmlns="http://www.w3.org/2000/svg" width="30" height="30" fill="red" class="bi bi-x-circle-fill" viewBox="0 0 16 16">
-                    <path d="M16 8A8 8 0 1 1 0 8a8 8 0 0 1 16 0M5.354 4.646a.5.5 0 1 0-.708.708L7.293 8l-2.647 2.646a.5.5 0 0 0 .708.708L8 8.707l2.646 2.647a.5.5 0 0 0 .708-.708L8.707 8l2.647-2.646a.5.5 0 0 0-.708-.708L8 7.293z"/>
-                </svg>
-            </button>
+        actionCell.innerHTML = `
+            <div class="d-flex justify-content-center">
+                <button class="btn btn-secondary" onclick="printReceipt('${customerName}', '${orderItem}', '${orderQuantity}', '${orderPrice}', '${discountType}', '${discount}', '${deliveryFee}')">
+                    <svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" fill="currentColor" class="bi bi-printer-fill" viewBox="0 0 16 16">
+                        <path d="M5 1a2 2 0 0 0-2 2v1h10V3a2 2 0 0 0-2-2zm6 8H5a1 1 0 0 0-1 1v3a1 1 0 0 0 1 1h6a1 1 0 0 0 1-1v-3a1 1 0 0 0-1-1"/>
+                        <path d="M0 7a2 2 0 0 1 2-2h12a2 2 0 0 1 2 2v3a2 2 0 0 1-2 2h-1v-2a2 2 0 0 0-2-2H5a2 2 0 0 0-2 2v2H2a2 2 0 0 1-2-2zm2.5 1a.5.5 0 1 0 0-1 .5.5 0 0 0 0 1"/>
+                    </svg>
+                </button>
+                <button class="btn" onclick="deleteOrder('${orderID}', '${customerName}')">
+                    <svg xmlns="http://www.w3.org/2000/svg" width="30" height="30" fill="red" class="bi bi-x-circle-fill" viewBox="0 0 16 16">
+                        <path d="M16 8A8 8 0 1 1 0 8a8 8 0 0 1 16 0M5.354 4.646a.5.5 0 1 0-.708.708L7.293 8l-2.647 2.646a.5.5 0 0 0 .708.708L8 8.707l2.646 2.647a.5.5 0 0 0 .708-.708L8.707 8l2.647-2.646a.5.5 0 0 0-.708-.708L8 7.293z"/>
+                    </svg>
+                </button>
+            </div>
         `;
     });
 
@@ -143,7 +153,7 @@ async function displayOrders() {
     }).page(currentPage).draw('page');
 }
 
-async function printReceipt(customer_name, items, quantities, prices) {
+async function printReceipt(customer_name, items, quantities, prices, discountType, discount, deliveryFee) {
     const spinnerWrapperEl = document.querySelector('.spinner-wrapper');
 
 	try {
@@ -154,7 +164,7 @@ async function printReceipt(customer_name, items, quantities, prices) {
         const quantityList = quantities.split('|').map(qty => qty.trim());
         const priceList = prices.split('|').map(price => price.trim());
 
-        var result = await eel.print_receipt(itemList, quantityList, priceList, customer_name)();
+        var result = await eel.print_receipt(itemList, quantityList, priceList, customer_name, discountType, discount, deliveryFee)();
 
         showAlertModal(result);
     } catch (e) {
