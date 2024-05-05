@@ -93,8 +93,8 @@ async function displayOrders() {
         let deleteCell = row.insertCell();
         deleteCell.classList.add('text-center');
 
-        let items = order[2].split(',');
-        let quantities = order[3].split(',');
+        let items = order[2].split('|');
+        let quantities = order[3].split('|');
         let itemsHtml = '';
 
         items.forEach((item, index) => { // Include 'index'
