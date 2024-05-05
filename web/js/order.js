@@ -150,9 +150,9 @@ async function printReceipt(customer_name, items, quantities, prices) {
         spinnerWrapperEl.style.opacity = 0.5;
 		spinnerWrapperEl.style.display = 'flex';
         
-        const itemList = items.split(',').map(item => item.trim());
-        const quantityList = quantities.split(',').map(qty => qty.trim());
-        const priceList = prices.split(',').map(price => price.trim());
+        const itemList = items.split('|').map(item => item.trim());
+        const quantityList = quantities.split('|').map(qty => qty.trim());
+        const priceList = prices.split('|').map(price => price.trim());
 
         var result = await eel.print_receipt(itemList, quantityList, priceList, customer_name)();
 
