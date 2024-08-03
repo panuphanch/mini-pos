@@ -1,10 +1,11 @@
-import eel, csv, os, gspread, io, json, base64, shutil, sys, ctypes
+import eel, csv, os, gspread, io, json, base64, shutil, sys, ctypes, subprocess
 from escpos.printer import Network
 from datetime import datetime
 from _internal.promptpay import generate_promptpay_qr
 from oauth2client.service_account import ServiceAccountCredentials
 from PIL import Image
 from collections import defaultdict
+from wcwidth import wcswidth
 import pandas as pd
 
 PERSISTENT_DIR = os.path.expanduser('~/.mini-pos')
@@ -427,9 +428,12 @@ def test_print(printerIP):
     """Print a test message and cut the paper."""
     try:
         p = Network(printerIP)
-        p.text("Test print successful!\n\n")
-        p.cut()
-        return "Test print successful!"
+        if p.is_online():
+            p.text("Test print successful!\n\n")
+            p.cut()
+            return "Test print successful!"
+        else:
+            return "The printer is not connected."
     except OSError as e:
         if '10057' in str(e):
             return "Failed to print: The printer is not connected."
@@ -437,6 +441,23 @@ def test_print(printerIP):
             return f"Failed to print: {str(e)}"
     except Exception as e:
         return f"Failed to print: {str(e)}"
+    
+def is_reachable(ip):
+    try:
+        # Use '-n 1' for Windows, '-c 3' for Unix-based systems
+        command = ["ping", "-n", "1", ip] if os.name == 'nt' else ["ping", "-c", "3", "-W", "3", ip]
+        response = subprocess.run(command, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
+
+        # Decode the stdout to a string
+        output = response.stdout.decode()
+        
+        # Check for unreachable message in the output
+        unreachable = "Destination host unreachable" in output or "Request timed out" in output
+        
+        return response.returncode == 0 and not unreachable
+    except Exception as e:
+        print(f"An error occurred: {e}")
+        return False
 
 @eel.expose
 def print_receipt(items, quantities, prices, customer_name, discount_type, discount, delivery_fee):
@@ -467,6 +488,9 @@ def print_receipt(items, quantities, prices, customer_name, discount_type, disco
     print(f"Thank You Message: {thank_you_message}")
 
     try:
+        if not is_reachable(printer_ip):
+            return "The printer is not connected."
+
         printer = Network(printer_ip)
 
         # Set thai character
@@ -478,29 +502,36 @@ def print_receipt(items, quantities, prices, customer_name, discount_type, disco
         printer.set(align='center')
         printer.image(get_image())
         printer.set(align='left')
-        printer.text("-----------------------------------------------\n")
+        printer.text("------------------------------------------------\n")
 
         printer.set(align='center')
         printer.text(f'{shop_name}\n')
         printer.text(f'{shop_phone}\n')
         printer.text(f'Line {shop_line}\n')
         printer.set(align='left')
-        printer.text("-----------------------------------------------\n")
+        printer.text("------------------------------------------------\n")
 
         printer.set(align='left')
         printer.text(f"Customer: {customer_name}\n")
-        printer.text("-----------------------------------------------\n")
+        printer.text("------------------------------------------------\n")
 
-        left_justify = 40
+        total_width = 48
         printer.set(align='left')
         for item, quantity, price in zip(items, quantities, prices):
             quantity = float(quantity)  # Parse quantity to float
             price = float(price)        # Parse price to float
 
             item_total_price = quantity * price
-            printer.text(f"{item}".ljust(left_justify) + f"฿{item_total_price:.2f}\n")
+            item_total_price_str = f"฿{item_total_price:.2f}"
+            
+            # Calculate the display width of the item text
+            item_display_width = wcswidth(item)
+            item_width = total_width - len(item_total_price_str)
+            
+            # Print item on the left and item_total_price with ฿ on the right
+            printer.text("{:<{}}{:>{}}\n".format(item, item_width - item_display_width + len(item), item_total_price_str, len(item_total_price_str)))
             printer.text(f"{quantity} x ฿{price:.2f}\n\n")
-        printer.text("-----------------------------------------------\n")
+        printer.text("------------------------------------------------\n")
 
         if discount_type != 'none':
             printer.set(align='left')
@@ -511,23 +542,37 @@ def print_receipt(items, quantities, prices, customer_name, discount_type, disco
             else:
                 total_price = total_price - float(discount)
                 discount_text = f"฿{float(discount):.2f}"
-            printer.text(f"Discount ({discount_text})".ljust(left_justify) + f"฿{float(discount):.2f}\n")
+            
+            discount_line = f"Discount ({discount_text}) ฿{float(discount):.2f}\n"
+            discount_display_width = wcswidth(discount_line)
+            total_width = 47  # Assuming total width of the receipt
+            right_justify = total_width - discount_display_width
+            
+            printer.text(f"Discount ({discount_text})" + f" ฿{float(discount):.2f}\n".rjust(right_justify))
 
         if float(delivery_fee) > 0:
             total_price = total_price + float(delivery_fee)
             printer.set(align='left')
-            printer.text(f"Delivery fee".ljust(left_justify) + f"฿{float(delivery_fee):.2f}\n")
+            delivery_fee_text = f"Delivery fee"
+            delivery_fee_amount = f"฿{float(delivery_fee):.2f}"
+            delivery_fee_display_width = wcswidth(delivery_fee_text) + wcswidth(delivery_fee_amount)
+            left_justify = total_width - delivery_fee_display_width
+            printer.text(f"{delivery_fee_text}{' ' * left_justify}{delivery_fee_amount}\n")
 
         printer.set(align='left', text_type='B')
-        printer.text("Amount due".ljust(left_justify) + f"฿{total_price:.2f}\n\n")
-        printer.text("-----------------------------------------------\n")
+        amount_due_text = "Amount due"
+        amount_due_amount = f"฿{total_price:.2f}"
+        amount_due_display_width = wcswidth(amount_due_text) + wcswidth(amount_due_amount)
+        left_justify = total_width - amount_due_display_width
+        printer.text(f"{amount_due_text}{' ' * left_justify}{amount_due_amount}\n\n")
+        printer.text("------------------------------------------------\n")
 
         qr_payload = generate_promptpay_qr(qr_code_type, qr_code_value, total_price)
         printer.set(align='center')
         printer.text(f"{qr_text}\n")
         printer.qr(qr_payload, size=7)
         printer.set(align='left')
-        printer.text("-----------------------------------------------\n")
+        printer.text("------------------------------------------------\n")
 
         printer.set(align='center')
         printer.text(f"{thank_you_message}\n")

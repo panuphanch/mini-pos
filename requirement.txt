@@ -1,6 +1,7 @@
 eel
-python-escpos==2.0.0
+python-escpos
 pyinstaller
 gspread
 oauth2client
 pandas
+wcwidth
