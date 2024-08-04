@@ -427,8 +427,8 @@ def load_config():
 def test_print(printerIP):
     """Print a test message and cut the paper."""
     try:
-        p = Network(printerIP)
-        if p.is_online():
+        if is_reachable(printerIP):
+            p = Network(printerIP)
             p.text("Test print successful!\n\n")
             p.cut()
             return "Test print successful!"
