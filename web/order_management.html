@@ -16,10 +16,19 @@
 						<input type="text" class="customer form-control" id="customer-name" required />
 					</div>
 					<div class="col-md-12">
-						<label for="productSelect" class="form-label">Select Product</label>
-						<select id="productSelect" class="form-control" onchange="addItemFromSelect(this)">
-							<option value="">เลือกเมนู</option>
-						</select>
+						<label for="productSearch" class="form-label">Select Product</label>
+						<div class="position-relative" id="productDropdownContainer">
+							<input type="text" class="form-control" id="productSearch"
+								   placeholder="Search products..." autocomplete="off"
+								   oninput="filterProducts(this.value)"
+								   onfocus="showProductDropdown()"
+								   onblur="hideProductDropdown()">
+							<ul class="list-group position-absolute w-100" id="productDropdown"
+								style="max-height: 300px; overflow-y: auto; z-index: 1000; display: none;">
+								<li class="list-group-item active">Select Product</li>
+								<li class="list-group-item text-muted">Loading products...</li>
+							</ul>
+						</div>
 					</div>
 				</div>
 				<div id="items_container" class="row mb-3 pr-0"></div>
@@ -107,10 +116,19 @@
 								<label class="form-label">Items</label>
 							</div>
 							<div class="mb-2">
-								<label for="editProductSelect" class="form-label">Select Product to Add</label>
-								<select id="editProductSelect" class="form-control" onchange="addItemFromEditSelect(this)">
-									<option value="">เลือกเมนู</option>
-								</select>
+								<label for="editProductSearch" class="form-label">Select Product to Add</label>
+								<div class="position-relative" id="editProductDropdownContainer">
+									<input type="text" class="form-control" id="editProductSearch"
+										   placeholder="Search products..." autocomplete="off"
+										   oninput="filterEditProducts(this.value)"
+										   onfocus="showEditProductDropdown()"
+										   onblur="hideEditProductDropdown()">
+									<ul class="list-group position-absolute w-100" id="editProductDropdown"
+										style="max-height: 300px; overflow-y: auto; z-index: 1000; display: none;">
+										<li class="list-group-item active">Select Product</li>
+										<li class="list-group-item text-muted">Loading products...</li>
+									</ul>
+								</div>
 							</div>
 							<div id="edit-items-container"></div>
 						</div>

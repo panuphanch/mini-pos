@@ -1,36 +1,119 @@
 let itemCount = 1;
 
-async function loadProductData() {
-    let productList = await eel.load_products()();
+let allProducts = [];
 
-    const productSelect = document.getElementById('productSelect');
-    productSelect.innerHTML = '';
-    const selectOption = document.createElement('option');
-    selectOption.value = "";
-    selectOption.textContent = "เลือกเมนู";
-    productSelect.appendChild(selectOption);
-    
-    productList.forEach(line => {
-        const [_, item, price] = line;
-        const option = document.createElement('option');
-        option.value = item;
-        option.textContent = item;
-        option.dataset.price = price;
-        productSelect.appendChild(option);
+async function loadProductData() {
+    allProducts = await eel.load_products()();
+    populateBootstrapDropdown('productDropdown', allProducts);
+}
+
+function populateBootstrapDropdown(dropdownId, products) {
+    const dropdown = document.getElementById(dropdownId);
+    dropdown.innerHTML = '';
+
+    // Add header
+    const header = document.createElement('li');
+    header.className = 'list-group-item active';
+    header.textContent = 'Select Product';
+    dropdown.appendChild(header);
+
+    // Add products
+    products.forEach(line => {
+        const [productId, item, price] = line;
+        const li = document.createElement('li');
+        li.className = 'list-group-item list-group-item-action';
+        li.dataset.product = item;
+        li.dataset.price = price;
+        li.style.cursor = 'pointer';
+        li.innerHTML = `${item} <span class="badge bg-secondary ms-2">฿${parseFloat(price).toFixed(2)}</span>`;
+
+        li.onmousedown = function(e) {
+            e.preventDefault(); // Prevent blur event
+            selectProduct(item, price, dropdownId);
+        };
+
+        dropdown.appendChild(li);
     });
+
+    // Add no results message (initially hidden)
+    const noResults = document.createElement('li');
+    noResults.className = 'list-group-item text-muted d-none';
+    noResults.textContent = 'No products found';
+    noResults.id = dropdownId + 'NoResults';
+    dropdown.appendChild(noResults);
 }
 
 function removeItemRow(button) {
     button.parentNode.parentNode.remove(); // Remove the parent row
 }
 
-function addItemFromSelect(selectElement) {
-    console.log(selectElement);
-    const selectedItem = selectElement.value;
-    const selectedPrice = selectElement.options[selectElement.selectedIndex].dataset.price;
+function selectProduct(productName, productPrice, dropdownId) {
+    if (dropdownId === 'productDropdown') {
+        addItemRow(productName, productPrice);
+        document.getElementById('productSearch').value = '';
+    } else if (dropdownId === 'editProductDropdown') {
+        addEditItemRow(productName, productPrice);
+        document.getElementById('editProductSearch').value = '';
+    }
+}
 
-    if (selectedItem) {
-        addItemRow(selectedItem, selectedPrice);
+function showProductDropdown() {
+    const dropdown = document.getElementById('productDropdown');
+    dropdown.style.display = 'block';
+}
+
+function hideProductDropdown() {
+    setTimeout(() => {
+        const dropdown = document.getElementById('productDropdown');
+        dropdown.style.display = 'none';
+    }, 200);
+}
+
+function showEditProductDropdown() {
+    const dropdown = document.getElementById('editProductDropdown');
+    dropdown.style.display = 'block';
+}
+
+function hideEditProductDropdown() {
+    setTimeout(() => {
+        const dropdown = document.getElementById('editProductDropdown');
+        dropdown.style.display = 'none';
+    }, 200);
+}
+
+function filterProducts(searchTerm) {
+    filterDropdownItems('productDropdown', searchTerm);
+}
+
+function filterEditProducts(searchTerm) {
+    filterDropdownItems('editProductDropdown', searchTerm);
+}
+
+function filterDropdownItems(dropdownId, searchTerm) {
+    const dropdown = document.getElementById(dropdownId);
+    const items = dropdown.querySelectorAll('.list-group-item');
+    const noResultsElement = document.getElementById(dropdownId + 'NoResults');
+    let hasVisibleItems = false;
+
+    searchTerm = searchTerm.toLowerCase();
+
+    items.forEach(item => {
+        if (item.dataset.product) {
+            const productName = item.dataset.product.toLowerCase();
+            if (productName.includes(searchTerm)) {
+                item.classList.remove('d-none');
+                hasVisibleItems = true;
+            } else {
+                item.classList.add('d-none');
+            }
+        }
+    });
+
+    // Show/hide no results message
+    if (hasVisibleItems || searchTerm === '') {
+        noResultsElement.classList.add('d-none');
+    } else {
+        noResultsElement.classList.remove('d-none');
     }
 }
 
@@ -249,34 +332,10 @@ function removeEditItemRow(button) {
 }
 
 async function loadEditProductData() {
-    let productList = await eel.load_products()();
-
-    const productSelect = document.getElementById('editProductSelect');
-    productSelect.innerHTML = '';
-    const selectOption = document.createElement('option');
-    selectOption.value = "";
-    selectOption.textContent = "เลือกเมนู";
-    productSelect.appendChild(selectOption);
-
-    productList.forEach(line => {
-        const [_, item, price] = line;
-        const option = document.createElement('option');
-        option.value = item;
-        option.textContent = item;
-        option.dataset.price = price;
-        productSelect.appendChild(option);
-    });
-}
-
-function addItemFromEditSelect(selectElement) {
-    const selectedItem = selectElement.value;
-    const selectedPrice = selectElement.options[selectElement.selectedIndex].dataset.price;
-
-    if (selectedItem) {
-        addEditItemRow(selectedItem, selectedPrice);
-        // Reset the select dropdown
-        selectElement.value = "";
+    if (allProducts.length === 0) {
+        allProducts = await eel.load_products()();
     }
+    populateBootstrapDropdown('editProductDropdown', allProducts);
 }
 
 function addNewEditItemRow() {
