@@ -362,6 +362,70 @@ def save_order(items, quantities, prices, customer_name, discount_type, discount
             ])
 
 @eel.expose
+def edit_order(original_date, original_customer_name, new_customer_name, items, quantities, prices, discount_type, discount, delivery_fee):
+    try:
+        # Read the CSV file into a DataFrame
+        df = pd.read_csv(ORDERS_FILE)
+
+        # Remove the old order entries
+        df = df[(df['date'] != original_date) | (df['customer_name'] != original_customer_name)]
+
+        # Write the DataFrame back without the old entries
+        df.to_csv(ORDERS_FILE, index=False)
+
+        # Add the updated order with the original date preserved
+        with open(ORDERS_FILE, 'a', newline='', encoding='UTF-8') as csv_file:
+            writer = csv.writer(csv_file)
+
+            if not os.path.exists(ORDERS_FILE):
+                writer.writerow(ORDER_COLUMNS)
+
+            # Use original_date instead of current time
+            for item, quantity, price in zip(items, quantities, prices):
+                order_data = [
+                    original_date,  # Preserve original date
+                    new_customer_name,
+                    item,
+                    quantity,
+                    price
+                ]
+                writer.writerow(order_data)
+
+            # Write discount transaction - only if discount_type is not 'none' and has valid value
+            if discount_type and discount_type != 'none' and discount and str(discount).strip() and float(discount) > 0:
+                writer.writerow([
+                    original_date,  # Preserve original date
+                    new_customer_name,
+                    "discount",
+                    discount_type,
+                    discount
+                ])
+            else:
+                # Always write discount row but with 'none' type and 0 value for consistency
+                writer.writerow([
+                    original_date,  # Preserve original date
+                    new_customer_name,
+                    "discount",
+                    "none",
+                    "0"
+                ])
+
+            # Write delivery fee transaction
+            if delivery_fee and float(delivery_fee) > 0:
+                writer.writerow([
+                    original_date,  # Preserve original date
+                    new_customer_name,
+                    "delivery_fee",
+                    "1",
+                    delivery_fee
+                ])
+
+    except pd.errors.EmptyDataError:
+        print("The orders file is empty.")
+    except Exception as e:
+        print(f"Failed to edit order: {str(e)}")
+
+@eel.expose
 def delete_order(date, customer_name):
     try:
         # Read the CSV file into a DataFrame
