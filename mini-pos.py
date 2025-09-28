@@ -34,9 +34,10 @@ if not os.path.exists(CONFIG_FILE):
     shutil.copy2(os.path.join(STATIC_DIR, 'config.json'), CONFIG_FILE)
 
 def hideConsole():
-  whnd = ctypes.windll.kernel32.GetConsoleWindow()
-  if whnd != 0:
-     ctypes.windll.user32.ShowWindow(whnd, 0)
+  if os.name == 'nt':  # Only on Windows
+    whnd = ctypes.windll.kernel32.GetConsoleWindow()
+    if whnd != 0:
+       ctypes.windll.user32.ShowWindow(whnd, 0)
 
 eel.init('web')
 hideConsole()
@@ -277,7 +278,7 @@ def delete_product(product_id):
 def load_orders():
     orders_dict = defaultdict(list)
     if os.path.exists(ORDERS_FILE):
-        with open(ORDERS_FILE, 'r', encoding='UTF-8') as csv_file:
+        with open(ORDERS_FILE, 'r', encoding='UTF-8', newline='') as csv_file:
             csv_reader = csv.reader(csv_file)
             header = next(csv_reader)
             for row in csv_reader:
@@ -290,21 +291,23 @@ def load_orders():
         items = "|".join(value[0] for value in values if value[0] != 'discount' and value[0] != 'delivery_fee')
         quantities = "|".join(value[1] for value in values if value[0] != 'discount' and value[0] != 'delivery_fee')
         prices = "|".join(value[2] for value in values if value[0] != 'discount' and value[0] != 'delivery_fee')
+
+
         total_withou_addition = calculated_total(prices.split('|'), quantities.split('|'))
         discounts = [(value[1], value[2]) for value in values if value[0] == 'discount']
         discount = 0
         total_discount = 0
         discount_type = 'none'
         if discounts and discounts[0][0] == 'percentage':
-            discount = float(discounts[0][1])
-            total_discount = float(discounts[0][1]) * total_withou_addition / 100
+            discount = float(discounts[0][1]) if discounts[0][1] else 0
+            total_discount = discount * total_withou_addition / 100
             discount_type = 'percentage'
         elif discounts and discounts[0][0] == 'amount':
-            discount = float(discounts[0][1])
-            total_discount = float(discounts[0][1])
+            discount = float(discounts[0][1]) if discounts[0][1] else 0
+            total_discount = discount
             discount_type = 'amount'
         delivery_fee = sum(float(value[2]) for value in values if value[0] == 'delivery_fee')
-        total = total_withou_addition - discount + delivery_fee
+        total = total_withou_addition - total_discount + delivery_fee
         orders.append([date, customer_name, items, quantities, prices, discount_type, f"{discount:.2f}", f"{total_discount:.2f}", f"{delivery_fee:.2f}", f"{total:.2f}"])
     
     orders.sort(key=lambda x: datetime.strptime(x[0], "%d/%m/%Y %H:%M"), reverse=True)
@@ -329,16 +332,26 @@ def save_order(items, quantities, prices, customer_name, discount_type, discount
             ]
             writer.writerow(order_data)
 
-        # Wrtie discount transaction
-        writer.writerow([
-            date_now,
-            customer_name,
-            "discount",
-            discount_type,
-            discount
-        ])
+        # Write discount transaction - only if discount_type is not 'none' and has valid value
+        if discount_type and discount_type != 'none' and discount and str(discount).strip() and float(discount) > 0:
+            writer.writerow([
+                date_now,
+                customer_name,
+                "discount",
+                discount_type,
+                discount
+            ])
+        else:
+            # Always write discount row but with 'none' type and 0 value for consistency
+            writer.writerow([
+                date_now,
+                customer_name,
+                "discount",
+                "none",
+                "0"
+            ])
 
-        # Wrtie delivery fee transaction
+        # Write delivery fee transaction
         if delivery_fee and float(delivery_fee) > 0:
             writer.writerow([
                 date_now,

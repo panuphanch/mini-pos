@@ -69,6 +69,17 @@ async function saveOrder(event) {
         return;
     }
 
+    // Validate discount: if type is selected but no value provided, reset to 'none'
+    if ((discountType === 'percentage' || discountType === 'amount') && (!discount || discount.trim() === '' || parseFloat(discount) <= 0)) {
+        discountType = 'none';
+        discount = '0';
+    }
+
+    // Ensure delivery fee has a valid value
+    if (!deliveryFee || deliveryFee.trim() === '') {
+        deliveryFee = '0';
+    }
+
     let products = Array.from(productElements).map(el => el.value);
     let quantities = Array.from(quantityElements).map(el => el.value);
     let prices = Array.from(priceElements).map(el => el.value);
