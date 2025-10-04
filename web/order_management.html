@@ -16,10 +16,19 @@
 						<input type="text" class="customer form-control" id="customer-name" required />
 					</div>
 					<div class="col-md-12">
-						<label for="productSelect" class="form-label">Select Product</label>
-						<select id="productSelect" class="form-control" onchange="addItemFromSelect(this)">
-							<option value="">เลือกเมนู</option>
-						</select>
+						<label for="productSearch" class="form-label">Select Product</label>
+						<div class="position-relative" id="productDropdownContainer">
+							<input type="text" class="form-control" id="productSearch"
+								   placeholder="Search products..." autocomplete="off"
+								   oninput="filterProducts(this.value)"
+								   onfocus="showProductDropdown()"
+								   onblur="hideProductDropdown()">
+							<ul class="list-group position-absolute w-100" id="productDropdown"
+								style="max-height: 300px; overflow-y: auto; z-index: 1000; display: none;">
+								<li class="list-group-item active">Select Product</li>
+								<li class="list-group-item text-muted">Loading products...</li>
+							</ul>
+						</div>
 					</div>
 				</div>
 				<div id="items_container" class="row mb-3 pr-0"></div>
@@ -85,5 +94,75 @@
 				</table>
 			</div>
 		</div>
+	</div>
+
+	<!-- Edit Order Modal -->
+	<div class="modal fade" id="editOrderModal" tabindex="-1">
+		<div class="modal-dialog modal-lg">
+			<div class="modal-content">
+				<div class="modal-header">
+					<h5 class="modal-title">Edit Order</h5>
+					<button type="button" class="btn-close" data-bs-dismiss="modal"></button>
+				</div>
+				<div class="modal-body">
+					<form id="edit-order-form">
+						<div class="mb-3">
+							<label for="edit-customer-name" class="form-label">Customer Name</label>
+							<input type="text" class="form-control" id="edit-customer-name" required />
+						</div>
+
+						<div class="mb-3">
+							<div class="d-flex justify-content-between align-items-center mb-2">
+								<label class="form-label">Items</label>
+							</div>
+							<div class="mb-2">
+								<label for="editProductSearch" class="form-label">Select Product to Add</label>
+								<div class="position-relative" id="editProductDropdownContainer">
+									<input type="text" class="form-control" id="editProductSearch"
+										   placeholder="Search products..." autocomplete="off"
+										   oninput="filterEditProducts(this.value)"
+										   onfocus="showEditProductDropdown()"
+										   onblur="hideEditProductDropdown()">
+									<ul class="list-group position-absolute w-100" id="editProductDropdown"
+										style="max-height: 300px; overflow-y: auto; z-index: 1000; display: none;">
+										<li class="list-group-item active">Select Product</li>
+										<li class="list-group-item text-muted">Loading products...</li>
+									</ul>
+								</div>
+							</div>
+							<div id="edit-items-container"></div>
+						</div>
+
+						<div class="row mb-3">
+							<div class="col-md-6">
+								<label for="edit-discount-type" class="form-label">Discount Type</label>
+								<select id="edit-discount-type" class="form-control">
+									<option value="none">None</option>
+									<option value="amount">Amount</option>
+									<option value="percentage">Percentage</option>
+								</select>
+							</div>
+							<div class="col-md-6">
+								<label for="edit-discount-input" class="form-label">Discount</label>
+								<input type="number" class="form-control" id="edit-discount-input" min="0" step="0.01" />
+							</div>
+						</div>
+
+						<div class="mb-3">
+							<label for="edit-delivery-fee" class="form-label">Delivery Fee</label>
+							<input type="number" class="form-control" id="edit-delivery-fee" min="0" step="0.01" />
+						</div>
+
+						<input type="hidden" id="original-order-date" />
+						<input type="hidden" id="original-order-customer" />
+					</form>
+				</div>
+				<div class="modal-footer">
+					<button type="button" class="btn btn-secondary" data-bs-dismiss="modal">Close</button>
+					<button type="button" class="btn btn-primary" onclick="submitEditOrder()">Save Changes</button>
+				</div>
+			</div>
+		</div>
+	</div>
 </body>
 </html>

@@ -8,6 +8,8 @@ Eel.egg-info
 *.pyc
 *.swp
 venv/
+*venv*/
 .tox
 _internal/*.json
 **/*.spec
+.claude
