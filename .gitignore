@@ -13,3 +13,9 @@ venv/
 _internal/*.json
 **/*.spec
 .claude
+
+# Tauri / Node
+node_modules/
+dist/
+src-tauri/target/
+src-tauri/gen/
