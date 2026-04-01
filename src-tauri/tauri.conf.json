@@ -10,7 +10,6 @@
     "beforeBuildCommand": "npm run build"
   },
   "app": {
-    "title": "Granny's POS",
     "windows": [
       {
         "title": "Granny's POS",
