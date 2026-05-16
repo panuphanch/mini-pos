@@ -1,6 +1,5 @@
 import { useState, useEffect, useCallback } from 'react';
 import { printer as tauriPrinter } from '../lib/tauri';
-import { checkApiHealth } from '../lib/api';
 
 interface StatusBarProps {
   printerIp: string;
@@ -8,7 +7,6 @@ interface StatusBarProps {
 
 export default function StatusBar({ printerIp }: StatusBarProps) {
   const [printerOnline, setPrinterOnline] = useState<boolean | null>(null);
-  const [apiOnline, setApiOnline] = useState<boolean | null>(null);
   const [currentTime, setCurrentTime] = useState(new Date());
 
   const checkPrinter = useCallback(async () => {
@@ -24,20 +22,13 @@ export default function StatusBar({ printerIp }: StatusBarProps) {
     }
   }, [printerIp]);
 
-  const checkApi = useCallback(async () => {
-    const ok = await checkApiHealth();
-    setApiOnline(ok);
-  }, []);
-
   useEffect(() => {
     checkPrinter();
-    checkApi();
     const interval = setInterval(() => {
       checkPrinter();
-      checkApi();
     }, 30000);
     return () => clearInterval(interval);
-  }, [checkPrinter, checkApi]);
+  }, [checkPrinter]);
 
   useEffect(() => {
     const timer = setInterval(() => setCurrentTime(new Date()), 1000);
@@ -63,7 +54,6 @@ export default function StatusBar({ printerIp }: StatusBarProps) {
         <span className="font-bold text-white text-base">Granny's POS</span>
       </div>
       <div className="flex items-center gap-4">
-        <StatusDot label="API" online={apiOnline} />
         <StatusDot label="Printer" online={printerOnline} />
         <span className="text-gray-400">
           {dateStr} {timeStr}
