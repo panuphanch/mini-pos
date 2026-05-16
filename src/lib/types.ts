@@ -1,56 +1,143 @@
-// === API Response Types (from grannys-ledger API) ===
+// === Config (mirror of Rust AppConfig with camelCase serde) ===
 
-export interface ApiResponse<T> {
-  success: boolean;
-  data: T;
-  error?: string;
+export type TabStrategy =
+  | 'latest'
+  | 'currentWeek'
+  | { pinned: string };
+
+export interface AppConfig {
+  printerIp: string;
+  paperWidth: number;
+  spreadsheetId: string;
+  serviceAccountPath: string;
+  defaultTabStrategy: TabStrategy;
+  shopName: string;
+  shopPhone: string;
+  shopLine: string;
+  promptpayType: string;        // "phone" | "id_card"
+  promptpayValue: string;
+  thankYouMessage: string;
 }
 
-export interface Product {
+// === Catalog ===
+
+export interface ProductLite {
   id: string;
   nameTh: string;
   nameEn: string | null;
   sellingPrice: number;
-  category: string | null;
-  isActive: boolean;
-  imageUrl: string | null;
 }
 
-export interface Customer {
+export interface CustomerLite {
   id: string;
   name: string;
   nickname: string | null;
-  phone: string | null;
-  totalSpent: number;
-  orderCount: number;
 }
 
-export interface OrderItemInput {
+// === Orders ===
+
+export interface OrderListRow {
+  id: string;
+  orderNumber: string;
+  customerName: string;
+  channel: string | null;
+  deliveryLocation: string | null;
+  totalAmount: number;
+  sourceTab: string | null;
+  sourceRow: number | null;
+  printedAt: string | null;
+  printCount: number;
+  deletedAt: string | null;
+  orderDate: string;
+  notes: string | null;
+  itemsSummary: string;
+}
+
+export interface OrderDetailItem {
   productId: string;
+  nameTh: string;
   quantity: number;
   unitPrice: number;
 }
 
-export interface OrderCreateInput {
-  customerId: string;
-  platform: string;
-  deliveryType: string;
-  items: OrderItemInput[];
-  discount?: number;
-  deliveryFee?: number;
-  notes?: string;
-}
-
-export interface Order {
+export interface OrderDetail {
   id: string;
   orderNumber: string;
+  customerName: string;
+  channel: string | null;
+  deliveryLocation: string | null;
+  notes: string | null;
   status: string;
   totalAmount: number;
+  discount: number;
+  deliveryFee: number;
   orderDate: string;
-  customer: { name: string };
+  sourceTab: string | null;
+  sourceRow: number | null;
+  printedAt: string | null;
+  printCount: number;
+  deletedAt: string | null;
+  items: OrderDetailItem[];
 }
 
-// === Receipt Types (matching Rust structs with camelCase serde) ===
+// === Sync ===
+
+export interface UnknownMenu {
+  alias: string;
+  suggestedPrice: number;
+}
+
+export interface UnknownCustomer {
+  alias: string;
+}
+
+export interface ParsedOrderItem {
+  menuName: string;
+  quantity: number;
+}
+
+export interface ParsedOrder {
+  sourceRow: number;
+  channel: string | null;
+  customer: string;
+  deliveryLocation: string | null;
+  notes: string | null;
+  items: ParsedOrderItem[];
+}
+
+export interface SyncPreview {
+  tab: string;
+  weekStartDate: string;
+  unknownMenus: UnknownMenu[];
+  unknownCustomers: UnknownCustomer[];
+  parsedOrders: ParsedOrder[];
+  willInsert: number;
+  willUpdate: number;
+  willSoftDelete: number;
+  parseErrors: string[];
+}
+
+export type MenuMappingChoice =
+  | { existing: { productId: string } }
+  | { create: { nameTh: string; nameEn: string | null; sellingPrice: number } };
+
+export type CustomerMappingChoice =
+  | { existing: { customerId: string } }
+  | { create: { name: string } };
+
+export interface SyncMappings {
+  menu: Array<[string, MenuMappingChoice]>;
+  customer: Array<[string, CustomerMappingChoice]>;
+}
+
+export interface SyncResult {
+  tab: string;
+  rowsAdded: number;
+  rowsUpdated: number;
+  rowsSoftDeleted: number;
+}
+
+// === Receipt (existing) ===
 
 export interface ReceiptItem {
   name: string;
@@ -61,7 +148,7 @@ export interface ReceiptItem {
 export interface ReceiptData {
   customerName: string;
   items: ReceiptItem[];
-  discountType: string; // "none" | "percentage" | "fixed"
+  discountType: string;
   discount: number;
   deliveryFee: number;
 }
@@ -73,24 +160,14 @@ export interface PrinterConfig {
   shopPhone: string;
   shopLine: string;
   qrText: string;
-  qrCodeType: string; // "phone" | "id_card"
+  qrCodeType: string;
   qrCodeValue: string;
   thankYouMessage: string;
 }
 
-// === App Config (matching Rust AppConfig with camelCase serde) ===
-
-export interface AppConfig {
-  printerIp: string;
-  paperWidth: number;
-  apiUrl: string;
-  serviceUsername: string;
-  servicePassword: string;
-}
-
-// === Local Cart Types ===
+// === POSPage cart ===
 
 export interface CartItem {
-  product: Product;
+  product: ProductLite;
   quantity: number;
 }

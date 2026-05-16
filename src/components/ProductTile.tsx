@@ -1,8 +1,8 @@
-import type { Product } from '../lib/types';
+import type { ProductLite } from '../lib/types';
 
 interface ProductTileProps {
-  product: Product;
-  onTap: (product: Product) => void;
+  product: ProductLite;
+  onTap: (product: ProductLite) => void;
 }
 
 export default function ProductTile({ product, onTap }: ProductTileProps) {
@@ -14,11 +14,6 @@ export default function ProductTile({ product, onTap }: ProductTileProps) {
       <span className="text-white text-center font-medium text-sm leading-tight line-clamp-2">
         {product.nameTh}
       </span>
-      {product.category && (
-        <span className="mt-1 text-[10px] text-gray-400 bg-gray-800 rounded px-1.5 py-0.5 truncate max-w-full">
-          {product.category}
-        </span>
-      )}
       <span className="mt-auto pt-2 text-green-400 font-bold text-base">
         ฿{product.sellingPrice.toFixed(0)}
       </span>

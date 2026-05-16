@@ -1,10 +1,10 @@
 import { useState, useMemo } from 'react';
-import type { Product } from '../lib/types';
+import type { ProductLite } from '../lib/types';
 import ProductTile from './ProductTile';
 
 interface ProductGridProps {
-  products: Product[];
-  onAddToCart: (product: Product) => void;
+  products: ProductLite[];
+  onAddToCart: (product: ProductLite) => void;
   loading: boolean;
 }
 
@@ -17,8 +17,7 @@ export default function ProductGrid({ products, onAddToCart, loading }: ProductG
     return products.filter(
       (p) =>
         p.nameTh.toLowerCase().includes(q) ||
-        (p.nameEn && p.nameEn.toLowerCase().includes(q)) ||
-        (p.category && p.category.toLowerCase().includes(q))
+        (p.nameEn && p.nameEn.toLowerCase().includes(q))
     );
   }, [products, search]);
 

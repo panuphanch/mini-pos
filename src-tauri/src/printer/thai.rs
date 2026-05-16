@@ -9,6 +9,9 @@ const FONT_PATH: &str = "fonts/NotoSansThai-Regular.ttf";
 pub enum Alignment {
     Left,
     Center,
+    /// Reserved — match arms exist in `thai.rs` and `receipt.rs` so any future
+    /// caller wanting right-aligned output works without touching this module.
+    #[allow(dead_code)]
     Right,
     /// Left text on the left, right text on the right (split layout for receipts)
     LeftRight,
