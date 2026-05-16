@@ -1,7 +1,6 @@
 import { useState } from 'react';
 import { useCartStore, type DiscountType } from '../stores/cart';
 import NumPad from './NumPad';
-import { api } from '../lib/api';
 import { printer as tauriPrinter } from '../lib/tauri';
 import type { AppConfig, PrinterConfig, ReceiptData } from '../lib/types';
 
@@ -12,7 +11,6 @@ interface PaymentDialogProps {
 
 export default function PaymentDialog({ onClose, appConfig }: PaymentDialogProps) {
   const items = useCartStore((s) => s.items);
-  const customerId = useCartStore((s) => s.customerId);
   const customerName = useCartStore((s) => s.customerName);
   const discountType = useCartStore((s) => s.discountType);
   const discountValue = useCartStore((s) => s.discountValue);
@@ -33,80 +31,47 @@ export default function PaymentDialog({ onClose, appConfig }: PaymentDialogProps
   const discountAmount = getDiscountAmount();
   const total = getTotal();
 
-  const handleSave = async (withPrint: boolean) => {
-    if (!customerId) {
-      setError('Please select a customer first');
+  const handlePrint = async () => {
+    if (!appConfig) {
+      setError('Config not loaded');
+      return;
+    }
+    if (items.length === 0) {
+      setError('Cart is empty');
       return;
     }
     setSaving(true);
     setError('');
 
     try {
-      const order = await api.orders.create({
-        customerId,
-        platform: 'walk-in',
-        deliveryType: 'pickup',
+      const receiptData: ReceiptData = {
+        customerName: customerName || '(walk-in)',
         items: items.map((i) => ({
-          productId: i.product.id,
+          name: i.product.nameTh,
           quantity: i.quantity,
-          unitPrice: i.product.sellingPrice,
+          price: i.product.sellingPrice,
         })),
-        discount: discountAmount > 0 ? discountAmount : undefined,
-        deliveryFee: deliveryFee > 0 ? deliveryFee : undefined,
-      });
+        discountType: discountType === 'none' ? 'none' : discountType === 'percentage' ? 'percentage' : 'fixed',
+        discount: discountValue,
+        deliveryFee,
+      };
+      const printerConfig: PrinterConfig = {
+        ip: appConfig.printerIp,
+        paperWidth: appConfig.paperWidth,
+        shopName: appConfig.shopName,
+        shopPhone: appConfig.shopPhone,
+        shopLine: appConfig.shopLine,
+        qrText: 'Scan to Pay',
+        qrCodeType: appConfig.promptpayType,
+        qrCodeValue: appConfig.promptpayValue,
+        thankYouMessage: appConfig.thankYouMessage,
+      };
 
-      if (withPrint && appConfig) {
-        try {
-          const receiptData: ReceiptData = {
-            customerName: customerName || 'Walk-in',
-            items: items.map((i) => ({
-              name: i.product.nameTh,
-              quantity: i.quantity,
-              price: i.product.sellingPrice,
-            })),
-            discountType: discountType === 'none' ? 'none' : discountType === 'percentage' ? 'percentage' : 'fixed',
-            discount: discountValue,
-            deliveryFee,
-          };
-          const printerConfig: PrinterConfig = {
-            ip: appConfig.printerIp,
-            paperWidth: appConfig.paperWidth,
-            shopName: '',
-            shopPhone: '',
-            shopLine: '',
-            qrText: '',
-            qrCodeType: 'phone',
-            qrCodeValue: '',
-            thankYouMessage: '',
-          };
-
-          // Try to load shop settings from API
-          try {
-            const settings = await api.settings.getAll();
-            const settingsMap = new Map(settings.map((s) => [s.key, s.value]));
-            printerConfig.shopName = settingsMap.get('shopName') || 'Granny\'s Bakery';
-            printerConfig.shopPhone = settingsMap.get('shopPhone') || '';
-            printerConfig.shopLine = settingsMap.get('shopLine') || '';
-            printerConfig.qrText = settingsMap.get('promptpayQrText') || 'Scan to Pay';
-            printerConfig.qrCodeType = settingsMap.get('promptpayType') || 'phone';
-            printerConfig.qrCodeValue = settingsMap.get('promptpayValue') || '';
-            printerConfig.thankYouMessage = settingsMap.get('thankYouMessage') || 'Thank you!';
-          } catch {
-            // Use defaults if settings fail
-          }
-
-          await tauriPrinter.printReceipt(receiptData, printerConfig);
-        } catch (printErr) {
-          console.error('Print failed:', printErr);
-          // Order was saved, just print failed — don't block
-        }
-      }
-
-      console.log('Order created:', order.orderNumber);
+      await tauriPrinter.printReceipt(receiptData, printerConfig);
       clear();
       onClose();
     } catch (err) {
-      setError(err instanceof Error ? err.message : 'Failed to save order');
+      setError(err instanceof Error ? err.message : 'Print failed');
     } finally {
       setSaving(false);
     }
@@ -231,18 +196,18 @@ export default function PaymentDialog({ onClose, appConfig }: PaymentDialogProps
         {/* Actions */}
         <div className="p-4 flex gap-2">
           <button
-            onClick={() => handleSave(false)}
+            onClick={onClose}
             disabled={saving}
-            className="flex-1 py-3 bg-blue-600 hover:bg-blue-500 disabled:bg-gray-600 text-white rounded-lg font-medium"
+            className="px-4 py-3 bg-gray-700 hover:bg-gray-600 disabled:bg-gray-800 text-gray-300 rounded-lg font-medium"
           >
-            {saving ? 'Saving...' : 'Save Order'}
+            Cancel
           </button>
           <button
-            onClick={() => handleSave(true)}
+            onClick={handlePrint}
             disabled={saving}
             className="flex-1 py-3 bg-green-600 hover:bg-green-500 disabled:bg-gray-600 text-white rounded-lg font-medium"
           >
-            {saving ? 'Saving...' : 'Save & Print'}
+            {saving ? 'Printing...' : 'Print Receipt'}
           </button>
         </div>
       </div>

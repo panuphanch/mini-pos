@@ -1,5 +1,5 @@
 import { create } from 'zustand';
-import type { Product, CartItem } from '../lib/types';
+import type { ProductLite, CartItem } from '../lib/types';
 
 export type DiscountType = 'none' | 'percentage' | 'amount';
 
@@ -11,7 +11,7 @@ interface CartState {
   discountValue: number;
   deliveryFee: number;
 
-  addItem: (product: Product) => void;
+  addItem: (product: ProductLite) => void;
   removeItem: (productId: string) => void;
   updateQuantity: (productId: string, qty: number) => void;
   setCustomer: (id: string | null, name: string) => void;

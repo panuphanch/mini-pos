@@ -1,6 +1,6 @@
 import { useState, useEffect, useRef } from 'react';
-import { api } from '../lib/api';
-import type { Customer } from '../lib/types';
+import { catalog } from '../lib/tauri';
+import type { CustomerLite } from '../lib/types';
 
 interface CustomerSearchProps {
   customerName: string;
@@ -10,9 +10,8 @@ interface CustomerSearchProps {
 
 export default function CustomerSearch({ customerName, onSelect, onClear }: CustomerSearchProps) {
   const [query, setQuery] = useState('');
-  const [results, setResults] = useState<Customer[]>([]);
+  const [results, setResults] = useState<CustomerLite[]>([]);
   const [showDropdown, setShowDropdown] = useState(false);
-  const [creating, setCreating] = useState(false);
   const debounceRef = useRef<ReturnType<typeof setTimeout>>();
 
   useEffect(() => {
@@ -25,7 +24,7 @@ export default function CustomerSearch({ customerName, onSelect, onClear }: Cust
     if (debounceRef.current) clearTimeout(debounceRef.current);
     debounceRef.current = setTimeout(async () => {
       try {
-        const customers = await api.customers.search(query);
+        const customers = await catalog.searchCustomers(query);
         setResults(customers);
         setShowDropdown(true);
       } catch {
@@ -38,25 +37,10 @@ export default function CustomerSearch({ customerName, onSelect, onClear }: Cust
     };
   }, [query]);
 
-  const handleSelect = (customer: Customer) => {
+  const handleSelect = (customer: CustomerLite) => {
     onSelect(customer.id, customer.nickname || customer.name);
     setQuery('');
     setShowDropdown(false);
-  };
-
-  const handleQuickAdd = async () => {
-    if (!query.trim()) return;
-    setCreating(true);
-    try {
-      const customer = await api.customers.create({ name: query.trim() });
-      onSelect(customer.id, customer.nickname || customer.name);
-      setQuery('');
-      setShowDropdown(false);
-    } catch {
-      // silently fail
-    } finally {
-      setCreating(false);
-    }
   };
 
   if (customerName) {
@@ -92,16 +76,11 @@ export default function CustomerSearch({ customerName, onSelect, onClear }: Cust
               className="w-full text-left px-3 py-2 hover:bg-gray-600 text-white text-sm border-b border-gray-600 last:border-0"
             >
               <span className="font-medium">{c.nickname || c.name}</span>
-              {c.phone && <span className="text-gray-400 ml-2">{c.phone}</span>}
             </button>
           ))}
-          <button
-            onClick={handleQuickAdd}
-            disabled={creating}
-            className="w-full text-left px-3 py-2 hover:bg-gray-600 text-blue-400 text-sm font-medium"
-          >
-            {creating ? 'Creating...' : `+ Add "${query.trim()}" as new customer`}
-          </button>
+          {results.length === 0 && (
+            <div className="px-3 py-2 text-gray-400 text-sm">No customers found</div>
+          )}
         </div>
       )}
     </div>
