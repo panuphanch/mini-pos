@@ -142,16 +142,20 @@ pub async fn soft_delete_missing_rows(
     tab: &str,
     keep_rows: &[i64],
 ) -> Result<i64, sqlx::Error> {
-    let placeholders = if keep_rows.is_empty() {
-        "NULL".to_string()
-    } else {
-        keep_rows.iter().map(|_| "?").collect::<Vec<_>>().join(",")
-    };
-    let sql = format!(
+    // When keep_rows is empty we want to soft-delete every live row for the
+    // tab. Building `NOT IN (NULL)` would silently match nothing in SQLite,
+    // so drop the predicate entirely instead.
+    let sql = if keep_rows.is_empty() {
         r#"UPDATE "order" SET deleted_at = ?, updated_at = ?
-           WHERE source_tab = ? AND deleted_at IS NULL AND source_row NOT IN ({})"#,
-        placeholders
-    );
+           WHERE source_tab = ? AND deleted_at IS NULL"#.to_string()
+    } else {
+        let placeholders = keep_rows.iter().map(|_| "?").collect::<Vec<_>>().join(",");
+        format!(
+            r#"UPDATE "order" SET deleted_at = ?, updated_at = ?
+               WHERE source_tab = ? AND deleted_at IS NULL AND source_row NOT IN ({})"#,
+            placeholders
+        )
+    };
     let mut q = sqlx::query(&sql).bind(now_iso()).bind(now_iso()).bind(tab);
     for r in keep_rows { q = q.bind(r); }
     let res = q.execute(&mut **tx).await?;
@@ -324,6 +328,31 @@ mod tests {
         assert_eq!(alive.len(), 2);
         let all = list_by_tab(&pool, Some("Order_30"), true, 100).await.unwrap();
         assert_eq!(all.len(), 3);
+    }
+
+    #[tokio::test]
+    async fn soft_delete_with_empty_keep_list_deletes_all_rows_in_tab() {
+        // Regression: when a synced tab loses every order row, keep_rows is
+        // empty. The old SQL built `NOT IN (NULL)` which SQLite treats as
+        // never-true, so rows stuck around. Empty keep_rows must wipe the tab.
+        let pool = init_memory_pool().await.unwrap();
+        let (p, c) = seed_pc(&pool).await;
+        for row in [11, 12] {
+            let mut tx = pool.begin().await.unwrap();
+            upsert_from_source(&mut tx, UpsertOrderInput {
+                customer_id: &c.id, channel: None, delivery_location: None, notes: None,
+                total_amount: 85, order_date: "2026-05-11",
+                source_tab: "Order_30", source_row: row,
+                items: vec![UpsertOrderItemInput { product_id: &p.id, quantity: 1, unit_price: 85 }],
+            }).await.unwrap();
+            tx.commit().await.unwrap();
+        }
+        let mut tx = pool.begin().await.unwrap();
+        let n = soft_delete_missing_rows(&mut tx, "Order_30", &[]).await.unwrap();
+        tx.commit().await.unwrap();
+        assert_eq!(n, 2);
+        let alive = list_by_tab(&pool, Some("Order_30"), false, 100).await.unwrap();
+        assert_eq!(alive.len(), 0);
     }
 
     #[tokio::test]

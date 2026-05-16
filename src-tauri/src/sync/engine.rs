@@ -107,12 +107,24 @@ pub async fn apply_sync(
     let preview = preview_sync(pool, sheets, spreadsheet_id, tab).await?;
 
     // 1) Apply menu mappings outside the row-loop transaction so search/find see them.
+    // Within a single sync the parser can surface the same canonical menu under
+    // two different unknown aliases (top-menu list + a shortened order column
+    // header). If the user fills both rows with identical "Create new" details
+    // we want one product, not two — otherwise future catalog edits diverge.
     let mut menu_alias_to_product: HashMap<String, String> = HashMap::new();
+    let mut created_menu_by_payload: HashMap<(String, Option<String>, i64), String> = HashMap::new();
     for (alias, choice) in mappings.menu {
         let pid = match choice {
             MenuMappingChoice::Existing { product_id } => product_id,
             MenuMappingChoice::Create { name_th, name_en, selling_price } => {
-                products::create(pool, &name_th, name_en.as_deref(), selling_price).await?.id
+                let key = (name_th.clone(), name_en.clone(), selling_price);
+                if let Some(existing) = created_menu_by_payload.get(&key) {
+                    existing.clone()
+                } else {
+                    let new_id = products::create(pool, &name_th, name_en.as_deref(), selling_price).await?.id;
+                    created_menu_by_payload.insert(key, new_id.clone());
+                    new_id
+                }
             }
         };
         products::upsert_alias(pool, &alias, &pid).await?;
@@ -388,6 +400,15 @@ mod tests {
         // Quantity 1, unit_price 100 → total 100, even though the column header
         // "Short" has no matching top-menu price.
         assert_eq!(rows[0].total_amount, 100);
+
+        // Identical Create payloads should collapse into one product so future
+        // catalog edits stay consistent across both aliases.
+        let product_count: i64 = sqlx::query_scalar(r#"SELECT COUNT(*) FROM product"#)
+            .fetch_one(&pool).await.unwrap();
+        assert_eq!(product_count, 1, "two aliases with identical Create payloads must share one product");
+        let full = crate::db::products::find_by_alias(&pool, "FullName").await.unwrap().unwrap();
+        let short = crate::db::products::find_by_alias(&pool, "Short").await.unwrap().unwrap();
+        assert_eq!(full.id, short.id);
     }
 
     #[tokio::test]

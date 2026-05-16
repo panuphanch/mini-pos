@@ -1,10 +1,31 @@
 import { useCallback, useEffect, useState } from 'react';
 import { sheets } from '../lib/tauri';
-import type { AppConfig, SyncMappings, SyncPreview, SyncResult } from '../lib/types';
+import type { AppConfig, SyncMappings, SyncPreview, SyncResult, TabStrategy } from '../lib/types';
 import MappingForm from '../components/MappingForm';
 
 interface SyncPageProps {
   appConfig: AppConfig | null;
+}
+
+// ISO 8601 week number (Thursday-anchored). Matches `Order_NN` tab naming.
+function isoWeekNumber(date: Date): number {
+  const d = new Date(Date.UTC(date.getFullYear(), date.getMonth(), date.getDate()));
+  d.setUTCDate(d.getUTCDate() + 4 - (d.getUTCDay() || 7));
+  const yearStart = new Date(Date.UTC(d.getUTCFullYear(), 0, 1));
+  return Math.ceil(((d.getTime() - yearStart.getTime()) / 86400000 + 1) / 7);
+}
+
+// Pick which tab to preselect, honoring the user's defaultTabStrategy setting.
+// Every branch falls back silently to the leftmost tab when no match is found —
+// the wife's convention is that the leftmost tab is the current week.
+function pickDefaultTab(names: string[], strategy: TabStrategy): string {
+  if (names.length === 0) return '';
+  if (strategy === 'latest') return names[0];
+  if (strategy === 'currentWeek') {
+    const target = `Order_${isoWeekNumber(new Date())}`;
+    return names.includes(target) ? target : names[0];
+  }
+  return names.includes(strategy.pinned) ? strategy.pinned : names[0];
 }
 
 export default function SyncPage({ appConfig }: SyncPageProps) {
@@ -26,9 +47,9 @@ export default function SyncPage({ appConfig }: SyncPageProps) {
       const result = await sheets.testConnection(appConfig);
       const names = result.map((t) => t.name);
       setTabs(names);
-      // Wife's convention: the leftmost tab in the sheet is the current week,
-      // so default to the first tab returned by the Sheets API.
-      if (names.length > 0 && !selectedTab) setSelectedTab(names[0]);
+      if (names.length > 0 && !selectedTab) {
+        setSelectedTab(pickDefaultTab(names, appConfig.defaultTabStrategy));
+      }
     } catch (e) {
       setError(e instanceof Error ? e.message : String(e));
     } finally {
