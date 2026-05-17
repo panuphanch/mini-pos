@@ -1,3 +1,12 @@
+import { Delete } from 'lucide-react';
+import { Button } from './ui/button';
+import {
+  Dialog,
+  DialogContent,
+  DialogHeader,
+  DialogTitle,
+} from './ui/dialog';
+
 interface NumPadProps {
   value: string;
   onChange: (value: string) => void;
@@ -5,6 +14,8 @@ interface NumPadProps {
   onClose: () => void;
   label: string;
 }
+
+const KEYS = ['1', '2', '3', '4', '5', '6', '7', '8', '9', '.', '0', 'backspace'] as const;
 
 export default function NumPad({ value, onChange, onConfirm, onClose, label }: NumPadProps) {
   const handleKey = (key: string) => {
@@ -17,44 +28,37 @@ export default function NumPad({ value, onChange, onConfirm, onClose, label }: N
     }
   };
 
-  const keys = ['1', '2', '3', '4', '5', '6', '7', '8', '9', '.', '0', 'backspace'];
-
   return (
-    <div className="fixed inset-0 bg-black/60 flex items-center justify-center z-50" onClick={onClose}>
-      <div
-        className="bg-gray-800 rounded-xl p-4 w-80 shadow-2xl"
-        onClick={(e) => e.stopPropagation()}
-      >
-        <div className="text-gray-400 text-sm mb-1">{label}</div>
-        <div className="bg-gray-900 rounded-lg px-4 py-3 text-white text-2xl text-right font-mono mb-3 min-h-[48px]">
+    <Dialog open onOpenChange={(open) => !open && onClose()}>
+      <DialogContent className="sm:max-w-sm">
+        <DialogHeader>
+          <DialogTitle>{label}</DialogTitle>
+        </DialogHeader>
+        <div className="rounded-md bg-muted px-4 py-4 text-right text-3xl font-mono tabular-nums min-h-[64px] flex items-center justify-end">
           {value || '0'}
         </div>
-        <div className="grid grid-cols-3 gap-2 mb-3">
-          {keys.map((key) => (
-            <button
+        <div className="grid grid-cols-3 gap-2">
+          {KEYS.map((key) => (
+            <Button
               key={key}
+              variant="outline"
+              size="lg"
+              className="h-14 text-xl"
               onClick={() => handleKey(key)}
-              className="h-14 rounded-lg bg-gray-700 hover:bg-gray-600 active:bg-gray-500 text-white text-xl font-medium flex items-center justify-center"
             >
-              {key === 'backspace' ? '⌫' : key}
-            </button>
+              {key === 'backspace' ? <Delete className="h-5 w-5" /> : key}
+            </Button>
           ))}
         </div>
-        <div className="flex gap-2">
-          <button
-            onClick={onClose}
-            className="flex-1 h-12 rounded-lg bg-gray-600 hover:bg-gray-500 text-white font-medium"
-          >
+        <div className="flex gap-2 pt-2">
+          <Button variant="secondary" size="lg" onClick={onClose} className="flex-1">
             Cancel
-          </button>
-          <button
-            onClick={onConfirm}
-            className="flex-1 h-12 rounded-lg bg-blue-600 hover:bg-blue-500 text-white font-medium"
-          >
+          </Button>
+          <Button size="lg" onClick={onConfirm} className="flex-1">
             Confirm
-          </button>
+          </Button>
         </div>
-      </div>
-    </div>
+      </DialogContent>
+    </Dialog>
   );
 }

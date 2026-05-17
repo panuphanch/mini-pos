@@ -1,6 +1,24 @@
 import { useEffect, useState } from 'react';
+import { CheckCircle2, AlertCircle } from 'lucide-react';
 import { appConfig as tauriConfig, printer, sheets } from '../lib/tauri';
 import type { AppConfig, TabStrategy } from '../lib/types';
+import { Button } from '../components/ui/button';
+import { Input } from '../components/ui/input';
+import { Label } from '../components/ui/label';
+import {
+  Card,
+  CardContent,
+  CardDescription,
+  CardHeader,
+  CardTitle,
+} from '../components/ui/card';
+import {
+  Select,
+  SelectContent,
+  SelectItem,
+  SelectTrigger,
+  SelectValue,
+} from '../components/ui/select';
 
 interface SettingsPageProps {
   appConfig: AppConfig | null;
@@ -13,14 +31,19 @@ export default function SettingsPage({ appConfig, onConfigSaved }: SettingsPageP
   const [error, setError] = useState('');
   const [tabs, setTabs] = useState<string[]>([]);
 
-  useEffect(() => { setCfg(appConfig); }, [appConfig]);
+  useEffect(() => {
+    setCfg(appConfig);
+  }, [appConfig]);
 
-  if (!cfg) return <div className="p-4 text-gray-400">Loading config…</div>;
+  if (!cfg) {
+    return <div className="p-6 text-muted-foreground">Loading config…</div>;
+  }
 
   const update = (patch: Partial<AppConfig>) => setCfg({ ...cfg, ...patch });
 
   const save = async () => {
-    setError(''); setMessage('');
+    setError('');
+    setMessage('');
     try {
       await tauriConfig.save(cfg);
       onConfigSaved(cfg);
@@ -31,13 +54,19 @@ export default function SettingsPage({ appConfig, onConfigSaved }: SettingsPageP
   };
 
   const testPrinter = async () => {
-    setError(''); setMessage('');
-    try { await printer.test(cfg.printerIp); setMessage('Test page sent'); }
-    catch (e) { setError(e instanceof Error ? e.message : String(e)); }
+    setError('');
+    setMessage('');
+    try {
+      await printer.test(cfg.printerIp);
+      setMessage('Test page sent');
+    } catch (e) {
+      setError(e instanceof Error ? e.message : String(e));
+    }
   };
 
   const testSheets = async () => {
-    setError(''); setMessage('');
+    setError('');
+    setMessage('');
     try {
       const result = await sheets.testConnection(cfg);
       setTabs(result.map((t) => t.name));
@@ -47,10 +76,12 @@ export default function SettingsPage({ appConfig, onConfigSaved }: SettingsPageP
     }
   };
 
-  const strategyValue: string =
-    cfg.defaultTabStrategy === 'latest' ? 'latest'
-      : cfg.defaultTabStrategy === 'currentWeek' ? 'currentWeek'
-      : 'pinned';
+  const strategyValue: 'latest' | 'currentWeek' | 'pinned' =
+    cfg.defaultTabStrategy === 'latest'
+      ? 'latest'
+      : cfg.defaultTabStrategy === 'currentWeek'
+        ? 'currentWeek'
+        : 'pinned';
 
   const setStrategy = (v: string, pinned?: string) => {
     let s: TabStrategy = 'latest';
@@ -60,106 +91,186 @@ export default function SettingsPage({ appConfig, onConfigSaved }: SettingsPageP
   };
 
   return (
-    <div className="h-full overflow-y-auto p-6 space-y-8 bg-gray-900 text-white">
-      <header>
-        <h2 className="text-xl font-bold">Settings</h2>
-        {error && <div className="mt-2 bg-red-900/60 text-red-200 px-3 py-2 text-sm rounded">{error}</div>}
-        {message && <div className="mt-2 bg-green-900/60 text-green-200 px-3 py-2 text-sm rounded">{message}</div>}
-      </header>
-
-      <section className="bg-gray-800/40 p-4 rounded-lg space-y-3">
-        <h3 className="font-semibold">Printer</h3>
-        <LabeledInput label="Printer IP" value={cfg.printerIp}
-          onChange={(v) => update({ printerIp: v })} />
-        <div className="flex items-center gap-3">
-          <label className="text-sm">Paper width</label>
-          <select value={cfg.paperWidth}
-            onChange={(e) => update({ paperWidth: parseInt(e.target.value, 10) })}
-            className="px-2 py-1 bg-gray-700 border border-gray-600 rounded text-sm">
-            <option value={58}>58 mm</option>
-            <option value={80}>80 mm</option>
-          </select>
-          <button onClick={testPrinter}
-            className="ml-auto px-3 py-1 bg-gray-700 hover:bg-gray-600 rounded text-sm">
-            Test print
-          </button>
-        </div>
-      </section>
-
-      <section className="bg-gray-800/40 p-4 rounded-lg space-y-3">
-        <h3 className="font-semibold">Google Sheets</h3>
-        <LabeledInput label="Spreadsheet ID" value={cfg.spreadsheetId}
-          onChange={(v) => update({ spreadsheetId: v })} />
-        <LabeledInput label="Service account file"
-          value={cfg.serviceAccountPath}
-          onChange={(v) => update({ serviceAccountPath: v })}
-          help="Filename relative to app data dir (default: service-account.json). Place the JSON key file in that folder." />
-        <div className="flex items-center gap-3">
-          <label className="text-sm">Default tab</label>
-          <select value={strategyValue}
-            onChange={(e) => setStrategy(e.target.value,
-              typeof cfg.defaultTabStrategy === 'object' ? cfg.defaultTabStrategy.pinned : '')}
-            className="px-2 py-1 bg-gray-700 border border-gray-600 rounded text-sm">
-            <option value="latest">Latest tab</option>
-            <option value="currentWeek">Current ISO week</option>
-            <option value="pinned">Pinned</option>
-          </select>
-          {strategyValue === 'pinned' && (
-            <input
-              value={typeof cfg.defaultTabStrategy === 'object' ? cfg.defaultTabStrategy.pinned : ''}
-              onChange={(e) => setStrategy('pinned', e.target.value)}
-              placeholder="Tab name (e.g. Order_30)"
-              className="px-2 py-1 bg-gray-700 border border-gray-600 rounded text-sm" />
+    <div className="h-full overflow-y-auto scrollbar-thin">
+      <div className="mx-auto max-w-3xl p-6 space-y-6">
+        <header className="space-y-3">
+          <h1 className="text-2xl font-bold tracking-tight">Settings</h1>
+          {error && (
+            <div className="flex items-start gap-2 rounded-md bg-destructive/10 text-destructive px-3 py-2 text-sm">
+              <AlertCircle className="h-4 w-4 mt-0.5 shrink-0" />
+              <span>{error}</span>
+            </div>
           )}
-          <button onClick={testSheets}
-            className="ml-auto px-3 py-1 bg-gray-700 hover:bg-gray-600 rounded text-sm">
-            Test connection
-          </button>
-        </div>
-        {tabs.length > 0 && (
-          <div className="text-xs text-gray-400">Tabs: {tabs.join(', ')}</div>
-        )}
-      </section>
+          {message && (
+            <div className="flex items-start gap-2 rounded-md bg-success/10 text-success px-3 py-2 text-sm">
+              <CheckCircle2 className="h-4 w-4 mt-0.5 shrink-0" />
+              <span>{message}</span>
+            </div>
+          )}
+        </header>
 
-      <section className="bg-gray-800/40 p-4 rounded-lg space-y-3">
-        <h3 className="font-semibold">Shop</h3>
-        <LabeledInput label="Shop name" value={cfg.shopName} onChange={(v) => update({ shopName: v })} />
-        <LabeledInput label="Phone" value={cfg.shopPhone} onChange={(v) => update({ shopPhone: v })} />
-        <LabeledInput label="LINE ID" value={cfg.shopLine} onChange={(v) => update({ shopLine: v })} />
-        <div className="flex items-center gap-3">
-          <label className="text-sm w-40">PromptPay type</label>
-          <select value={cfg.promptpayType}
-            onChange={(e) => update({ promptpayType: e.target.value })}
-            className="px-2 py-1 bg-gray-700 border border-gray-600 rounded text-sm">
-            <option value="phone">Phone</option>
-            <option value="id_card">ID card</option>
-          </select>
-        </div>
-        <LabeledInput label="PromptPay value" value={cfg.promptpayValue}
-          onChange={(v) => update({ promptpayValue: v })} />
-        <LabeledInput label="Thank-you message" value={cfg.thankYouMessage}
-          onChange={(v) => update({ thankYouMessage: v })} />
-      </section>
+        <Card>
+          <CardHeader>
+            <CardTitle>Printer</CardTitle>
+            <CardDescription>Thermal printer connection and paper size.</CardDescription>
+          </CardHeader>
+          <CardContent className="space-y-4">
+            <Field
+              label="Printer IP"
+              value={cfg.printerIp}
+              onChange={(v) => update({ printerIp: v })}
+            />
+            <div className="grid grid-cols-1 sm:grid-cols-[1fr_auto] gap-3 items-end">
+              <div className="space-y-2">
+                <Label htmlFor="paper-width">Paper width</Label>
+                <Select
+                  value={String(cfg.paperWidth)}
+                  onValueChange={(v) => update({ paperWidth: parseInt(v, 10) })}
+                >
+                  <SelectTrigger id="paper-width">
+                    <SelectValue />
+                  </SelectTrigger>
+                  <SelectContent>
+                    <SelectItem value="58">58 mm</SelectItem>
+                    <SelectItem value="80">80 mm</SelectItem>
+                  </SelectContent>
+                </Select>
+              </div>
+              <Button variant="outline" onClick={testPrinter}>
+                Test print
+              </Button>
+            </div>
+          </CardContent>
+        </Card>
 
-      <div className="flex justify-end">
-        <button onClick={save}
-          className="px-5 py-2 bg-blue-600 hover:bg-blue-500 rounded-lg">
-          Save settings
-        </button>
+        <Card>
+          <CardHeader>
+            <CardTitle>Google Sheets</CardTitle>
+            <CardDescription>Source of truth for weekly order tabs.</CardDescription>
+          </CardHeader>
+          <CardContent className="space-y-4">
+            <Field
+              label="Spreadsheet ID"
+              value={cfg.spreadsheetId}
+              onChange={(v) => update({ spreadsheetId: v })}
+            />
+            <Field
+              label="Service account file"
+              value={cfg.serviceAccountPath}
+              onChange={(v) => update({ serviceAccountPath: v })}
+              help="Filename relative to the app data dir (default: service-account.json). Place the JSON key file there."
+            />
+            <div className="grid grid-cols-1 sm:grid-cols-[1fr_auto] gap-3 items-end">
+              <div className="space-y-2">
+                <Label htmlFor="default-tab">Default tab</Label>
+                <Select
+                  value={strategyValue}
+                  onValueChange={(v) =>
+                    setStrategy(
+                      v,
+                      typeof cfg.defaultTabStrategy === 'object'
+                        ? cfg.defaultTabStrategy.pinned
+                        : '',
+                    )
+                  }
+                >
+                  <SelectTrigger id="default-tab">
+                    <SelectValue />
+                  </SelectTrigger>
+                  <SelectContent>
+                    <SelectItem value="latest">Latest tab</SelectItem>
+                    <SelectItem value="currentWeek">Current ISO week</SelectItem>
+                    <SelectItem value="pinned">Pinned</SelectItem>
+                  </SelectContent>
+                </Select>
+              </div>
+              <Button variant="outline" onClick={testSheets}>
+                Test connection
+              </Button>
+            </div>
+            {strategyValue === 'pinned' && (
+              <Field
+                label="Pinned tab name"
+                value={
+                  typeof cfg.defaultTabStrategy === 'object' ? cfg.defaultTabStrategy.pinned : ''
+                }
+                onChange={(v) => setStrategy('pinned', v)}
+                placeholder="e.g. Order_30"
+              />
+            )}
+            {tabs.length > 0 && (
+              <div className="text-xs text-muted-foreground">Tabs: {tabs.join(', ')}</div>
+            )}
+          </CardContent>
+        </Card>
+
+        <Card>
+          <CardHeader>
+            <CardTitle>Shop</CardTitle>
+            <CardDescription>Printed on every receipt.</CardDescription>
+          </CardHeader>
+          <CardContent className="space-y-4">
+            <Field label="Shop name" value={cfg.shopName} onChange={(v) => update({ shopName: v })} />
+            <Field label="Phone" value={cfg.shopPhone} onChange={(v) => update({ shopPhone: v })} />
+            <Field label="LINE ID" value={cfg.shopLine} onChange={(v) => update({ shopLine: v })} />
+            <div className="space-y-2">
+              <Label htmlFor="promptpay-type">PromptPay type</Label>
+              <Select
+                value={cfg.promptpayType}
+                onValueChange={(v) => update({ promptpayType: v })}
+              >
+                <SelectTrigger id="promptpay-type">
+                  <SelectValue />
+                </SelectTrigger>
+                <SelectContent>
+                  <SelectItem value="phone">Phone</SelectItem>
+                  <SelectItem value="id_card">ID card</SelectItem>
+                </SelectContent>
+              </Select>
+            </div>
+            <Field
+              label="PromptPay value"
+              value={cfg.promptpayValue}
+              onChange={(v) => update({ promptpayValue: v })}
+            />
+            <Field
+              label="Thank-you message"
+              value={cfg.thankYouMessage}
+              onChange={(v) => update({ thankYouMessage: v })}
+            />
+          </CardContent>
+        </Card>
+
+        <div className="flex justify-end pb-2">
+          <Button onClick={save} size="lg">
+            Save settings
+          </Button>
+        </div>
       </div>
     </div>
   );
 }
 
-function LabeledInput({ label, value, onChange, help }: {
-  label: string; value: string; onChange: (v: string) => void; help?: string;
-}) {
+interface FieldProps {
+  label: string;
+  value: string;
+  onChange: (value: string) => void;
+  placeholder?: string;
+  help?: string;
+}
+
+function Field({ label, value, onChange, placeholder, help }: FieldProps) {
+  const id = label.toLowerCase().replace(/[^a-z0-9]+/g, '-');
   return (
-    <div className="flex flex-col gap-1">
-      <label className="text-sm text-gray-300">{label}</label>
-      <input value={value} onChange={(e) => onChange(e.target.value)}
-        className="px-3 py-2 bg-gray-700 border border-gray-600 rounded text-sm" />
-      {help && <span className="text-xs text-gray-500">{help}</span>}
+    <div className="space-y-2">
+      <Label htmlFor={id}>{label}</Label>
+      <Input
+        id={id}
+        value={value}
+        onChange={(e) => onChange(e.target.value)}
+        placeholder={placeholder}
+      />
+      {help && <p className="text-xs text-muted-foreground">{help}</p>}
     </div>
   );
 }
