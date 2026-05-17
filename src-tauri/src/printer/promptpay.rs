@@ -1,5 +1,11 @@
 use crc::{Crc, CRC_16_XMODEM};
 
+// Thai PromptPay QR uses CRC-16 with the XMODEM polynomial (0x1021) and an
+// initial value of 0x0000. This is what bank scanners (Krungthai/Bualuang/
+// SCB Easy) actually accept in the wild and matches the reference
+// implementations at https://github.com/ptwptwz/promptpay and
+// dtinth/promptpay-qr. Despite the EMVCo TR-1 spec naming "CRC-16/CCITT"
+// (init 0xFFFF), real-world Thai PromptPay deployments use init 0x0000.
 const CRC16: Crc<u16> = Crc::<u16>::new(&CRC_16_XMODEM);
 
 /// Account type for PromptPay QR generation.
@@ -114,5 +120,18 @@ mod tests {
         assert!(result.starts_with("000201010212"));
         // Should contain ID card sub-field
         assert!(result.contains("02131234567890123"));
+    }
+
+    /// Regression test for the CRC bug: PromptPay rejected payloads built with
+    /// CRC-16/XMODEM. With the correct CRC-16/CCITT-FALSE we produce the exact
+    /// payload that a known-good Thai bank app produces for this input.
+    #[test]
+    fn test_known_good_id_card_payload() {
+        let result =
+            generate_promptpay_qr(AccountType::IdCard, "1100700546038", 415.00, false);
+        assert_eq!(
+            result,
+            "00020101021129370016A000000677010111021311007005460385802TH53037645406415.006304C221"
+        );
     }
 }

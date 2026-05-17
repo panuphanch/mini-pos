@@ -1,8 +1,8 @@
 use ab_glyph::{Font, FontRef, PxScale, ScaleFont};
 
-/// Font bytes — bundled at compile time if the file exists.
-/// The font file should be placed at src-tauri/fonts/NotoSansThai-Regular.ttf
-const FONT_PATH: &str = "fonts/NotoSansThai-Regular.ttf";
+/// Noto Sans Thai font, embedded into the binary at compile time.
+/// Sourced from google/fonts (OFL). The variable font's default axes render as Regular weight.
+const FONT_BYTES: &[u8] = include_bytes!("../../fonts/NotoSansThai-Regular.ttf");
 
 /// Text alignment for rendered lines.
 #[derive(Debug, Clone, Copy)]
@@ -17,41 +17,18 @@ pub enum Alignment {
     LeftRight,
 }
 
-/// Attempt to load the bundled Thai font from the fonts directory.
-fn load_font() -> Option<Vec<u8>> {
-    // Try to load from the executable's directory first, then from a relative path
-    let exe_dir = std::env::current_exe()
-        .ok()
-        .and_then(|p| p.parent().map(|p| p.to_path_buf()));
-
-    if let Some(dir) = &exe_dir {
-        let font_path = dir.join(FONT_PATH);
-        if font_path.exists() {
-            return std::fs::read(&font_path).ok();
+/// Parsed font handle, cached for the process lifetime.
+fn load_font() -> Option<FontRef<'static>> {
+    use std::sync::OnceLock;
+    static FONT: OnceLock<Option<FontRef<'static>>> = OnceLock::new();
+    FONT.get_or_init(|| match FontRef::try_from_slice(FONT_BYTES) {
+        Ok(f) => Some(f),
+        Err(e) => {
+            eprintln!("WARNING: Failed to parse embedded Thai font: {}", e);
+            None
         }
-        // Also try one level up (for dev builds where exe is in target/debug)
-        let font_path = dir
-            .parent()
-            .and_then(|p| p.parent())
-            .map(|p| p.join(FONT_PATH));
-        if let Some(fp) = font_path {
-            if fp.exists() {
-                return std::fs::read(&fp).ok();
-            }
-        }
-    }
-
-    // Try from CWD as fallback (development)
-    let cwd_path = std::path::Path::new(FONT_PATH);
-    if cwd_path.exists() {
-        return std::fs::read(cwd_path).ok();
-    }
-
-    eprintln!(
-        "WARNING: Thai font not found at '{}'. Thai text rendering will be skipped.",
-        FONT_PATH
-    );
-    None
+    })
+    .clone()
 }
 
 /// Render a single line of text to a monochrome bitmap suitable for ESC/POS raster printing.
@@ -76,17 +53,9 @@ pub fn render_text_line_split(
     width_px: u32,
     align: Alignment,
 ) -> Vec<u8> {
-    let font_data = match load_font() {
-        Some(data) => data,
+    let font = match load_font() {
+        Some(f) => f,
         None => return Vec::new(),
-    };
-
-    let font = match FontRef::try_from_slice(&font_data) {
-        Ok(f) => f,
-        Err(e) => {
-            eprintln!("WARNING: Failed to parse font: {}", e);
-            return Vec::new();
-        }
     };
 
     let scale = PxScale::from(font_size);

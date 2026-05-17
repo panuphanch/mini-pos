@@ -2,6 +2,15 @@ use crate::printer::promptpay::{self, AccountType};
 use crate::printer::thai::{self, Alignment};
 use serde::{Deserialize, Serialize};
 
+/// Shop logo, embedded at compile time. Sourced from web/images/logo.png so the
+/// new Tauri receipt prints the same logo the legacy Python version did.
+const LOGO_PNG: &[u8] = include_bytes!("../../../web/images/logo.png");
+
+/// ESC E 1 — enable bold.
+const ESC_BOLD_ON: [u8; 3] = [0x1B, 0x45, 0x01];
+/// ESC E 0 — disable bold.
+const ESC_BOLD_OFF: [u8; 3] = [0x1B, 0x45, 0x00];
+
 /// Configuration for connecting to and formatting for the printer.
 #[derive(Debug, Serialize, Deserialize, Clone)]
 #[serde(rename_all = "camelCase")]
@@ -51,13 +60,16 @@ fn paper_width_px(paper_mm: u32) -> u32 {
 /// Build the complete ESC/POS command byte sequence for a receipt.
 pub fn build_receipt(receipt: &ReceiptData, config: &PrinterConfig) -> Result<Vec<u8>, String> {
     let width_px = paper_width_px(config.paper_width);
-    let font_size = if config.paper_width == 58 { 20.0 } else { 24.0 };
+    let font_size = if config.paper_width == 58 { 30.0 } else { 36.0 };
     let separator = "------------------------------------------------";
 
     let mut cmds: Vec<u8> = Vec::new();
 
     // === Initialize printer ===
     cmds.extend_from_slice(&[0x1B, 0x40]);
+
+    // === Logo (center) ===
+    append_logo(&mut cmds, width_px);
 
     // === Shop header (center) ===
     append_thai_line(&mut cmds, &config.shop_name, font_size, width_px, Alignment::Center);
@@ -90,15 +102,7 @@ pub fn build_receipt(receipt: &ReceiptData, config: &PrinterConfig) -> Result<Ve
         subtotal += line_total;
         let price_str = format!("฿{:.2}", line_total);
 
-        // Item name left, price right
-        let raster = thai::render_text_line_split(
-            &item.name,
-            &price_str,
-            font_size,
-            width_px,
-            Alignment::LeftRight,
-        );
-        cmds.extend_from_slice(&raster);
+        append_split_line(&mut cmds, &item.name, &price_str, font_size, width_px);
 
         // Quantity x unit price detail line
         let detail = format!("{} x ฿{:.2}", item.quantity, item.price);
@@ -121,40 +125,21 @@ pub fn build_receipt(receipt: &ReceiptData, config: &PrinterConfig) -> Result<Ve
         };
         total -= discount_amount;
         let discount_val = format!("฿{:.2}", discount_amount);
-        let raster = thai::render_text_line_split(
-            &discount_label,
-            &discount_val,
-            font_size,
-            width_px,
-            Alignment::LeftRight,
-        );
-        cmds.extend_from_slice(&raster);
+        append_split_line(&mut cmds, &discount_label, &discount_val, font_size, width_px);
     }
 
     // === Delivery fee ===
     if receipt.delivery_fee > 0.0 {
         total += receipt.delivery_fee;
         let fee_str = format!("฿{:.2}", receipt.delivery_fee);
-        let raster = thai::render_text_line_split(
-            "Delivery fee",
-            &fee_str,
-            font_size,
-            width_px,
-            Alignment::LeftRight,
-        );
-        cmds.extend_from_slice(&raster);
+        append_split_line(&mut cmds, "Delivery fee", &fee_str, font_size, width_px);
     }
 
     // === Amount due (bold/larger) ===
     let total_str = format!("฿{:.2}", total);
-    let raster = thai::render_text_line_split(
-        "Amount due",
-        &total_str,
-        font_size * 1.2,
-        width_px,
-        Alignment::LeftRight,
-    );
-    cmds.extend_from_slice(&raster);
+    cmds.extend_from_slice(&ESC_BOLD_ON);
+    append_split_line(&mut cmds, "Amount due", &total_str, font_size * 1.2, width_px);
+    cmds.extend_from_slice(&ESC_BOLD_OFF);
 
     append_ascii_center(&mut cmds, separator);
 
@@ -175,7 +160,7 @@ pub fn build_receipt(receipt: &ReceiptData, config: &PrinterConfig) -> Result<Ve
 
     append_ascii_center(&mut cmds, separator);
 
-    // === Thank you + timestamp ===
+    // === Thank you ===
     append_thai_line(
         &mut cmds,
         &config.thank_you_message,
@@ -183,9 +168,6 @@ pub fn build_receipt(receipt: &ReceiptData, config: &PrinterConfig) -> Result<Ve
         width_px,
         Alignment::Center,
     );
-
-    let now = chrono_timestamp();
-    append_thai_line(&mut cmds, &now, font_size * 0.8, width_px, Alignment::Center);
 
     // === Feed and cut ===
     cmds.extend_from_slice(&[0x1B, 0x64, 0x04]); // Feed 4 lines
@@ -205,18 +187,160 @@ fn append_thai_line(
 ) {
     let raster = thai::render_text_line(text, font_size, width_px, align);
     if raster.is_empty() {
-        // Fallback: send as raw ASCII text
         let align_byte = match align {
             Alignment::Center => 0x01,
             Alignment::Right => 0x02,
             _ => 0x00,
         };
         cmds.extend_from_slice(&[0x1B, 0x61, align_byte]);
-        cmds.extend_from_slice(text.as_bytes());
+        cmds.extend_from_slice(ascii_fallback(text).as_bytes());
         cmds.push(b'\n');
     } else {
         cmds.extend_from_slice(&raster);
     }
+}
+
+/// Append a left/right split line. If the Thai font is available the line is
+/// rendered as a raster image; otherwise an ASCII fallback line is emitted so
+/// items, discounts, fees, and totals never silently disappear from the receipt.
+fn append_split_line(
+    cmds: &mut Vec<u8>,
+    left: &str,
+    right: &str,
+    font_size: f32,
+    width_px: u32,
+) {
+    let raster = thai::render_text_line_split(left, right, font_size, width_px, Alignment::LeftRight);
+    if !raster.is_empty() {
+        cmds.extend_from_slice(&raster);
+        return;
+    }
+
+    // ASCII fallback — pad with spaces to RECEIPT_COLS (matches legacy Python layout).
+    const RECEIPT_COLS: usize = 48;
+    let l = ascii_fallback(left);
+    let r = ascii_fallback(right);
+    let l_w = l.chars().count();
+    let r_w = r.chars().count();
+    let pad = RECEIPT_COLS.saturating_sub(l_w + r_w).max(1);
+
+    cmds.extend_from_slice(&[0x1B, 0x61, 0x00]); // left align
+    cmds.extend_from_slice(l.as_bytes());
+    for _ in 0..pad {
+        cmds.push(b' ');
+    }
+    cmds.extend_from_slice(r.as_bytes());
+    cmds.push(b'\n');
+}
+
+/// Replace non-ASCII glyphs we can transliterate (e.g. ฿ → "THB") and drop
+/// the rest, so a missing font doesn't emit raw UTF-8 bytes the printer
+/// would render as garbage.
+fn ascii_fallback(text: &str) -> String {
+    let mut out = String::with_capacity(text.len());
+    for ch in text.chars() {
+        match ch {
+            '฿' => out.push_str("THB"),
+            c if c.is_ascii() => out.push(c),
+            _ => out.push('?'),
+        }
+    }
+    out
+}
+
+/// Decode the embedded logo PNG and emit it as an ESC/POS raster image,
+/// centered to the paper width. Logs and skips if decoding fails — receipt
+/// should still print.
+fn append_logo(cmds: &mut Vec<u8>, width_px: u32) {
+    let rgba = match image::load_from_memory(LOGO_PNG) {
+        Ok(i) => i.to_rgba8(),
+        Err(e) => {
+            eprintln!("WARNING: Failed to decode embedded logo PNG: {}", e);
+            return;
+        }
+    };
+
+    // Composite RGBA over white so transparent regions don't print as black ink.
+    // Then convert to a single luma channel for thresholding.
+    let mut luma = image::GrayImage::new(rgba.width(), rgba.height());
+    for (x, y, p) in rgba.enumerate_pixels() {
+        let [r, g, b, a] = p.0;
+        let af = a as f32 / 255.0;
+        let mix = |c: u8| -> u8 {
+            (c as f32 * af + 255.0 * (1.0 - af)).round().clamp(0.0, 255.0) as u8
+        };
+        // Rec. 601 luma after compositing over white.
+        let lum = (0.299 * mix(r) as f32 + 0.587 * mix(g) as f32 + 0.114 * mix(b) as f32)
+            .round() as u8;
+        luma.put_pixel(x, y, image::Luma([lum]));
+    }
+
+    // Scale logo to ~60% of paper width — balances legibility of the line-art
+    // logo with not dominating the top of the receipt.
+    let target_w = ((width_px * 60) / 100).max(8) & !7; // multiple of 8
+    let scale = target_w as f32 / luma.width() as f32;
+    let target_h = ((luma.height() as f32) * scale).round().max(1.0) as u32;
+    let resized = image::imageops::resize(&luma, target_w, target_h, image::imageops::FilterType::Lanczos3);
+
+    // Floyd-Steinberg dither the grayscale image to 1-bpp before packing.
+    // Hard thresholding loses thin strokes (the original line-art logo); diffusion
+    // preserves them by spreading quantization error to neighboring pixels.
+    let w = target_w as usize;
+    let h = target_h as usize;
+    let mut buf: Vec<f32> = resized.pixels().map(|p| p.0[0] as f32).collect();
+    for y in 0..h {
+        for x in 0..w {
+            let idx = y * w + x;
+            let old = buf[idx];
+            let new = if old < 128.0 { 0.0 } else { 255.0 };
+            buf[idx] = new;
+            let err = old - new;
+            if x + 1 < w {
+                buf[idx + 1] += err * 7.0 / 16.0;
+            }
+            if y + 1 < h {
+                if x > 0 {
+                    buf[idx + w - 1] += err * 3.0 / 16.0;
+                }
+                buf[idx + w] += err * 5.0 / 16.0;
+                if x + 1 < w {
+                    buf[idx + w + 1] += err * 1.0 / 16.0;
+                }
+            }
+        }
+    }
+
+    // Pack into a centered 1-bpp bitmap of `width_px` wide rows.
+    let bytes_per_row = (width_px / 8) as usize;
+    let mut bitmap = vec![0u8; bytes_per_row * h];
+    let x_offset = ((width_px - target_w) / 2) as usize;
+
+    for y in 0..h {
+        for x in 0..w {
+            if buf[y * w + x] < 128.0 {
+                let gx = x + x_offset;
+                let byte_idx = y * bytes_per_row + (gx / 8);
+                let bit_idx = 7 - (gx % 8);
+                if byte_idx < bitmap.len() {
+                    bitmap[byte_idx] |= 1 << bit_idx;
+                }
+            }
+        }
+    }
+    let target_h = h as u32;
+
+    // GS v 0 raster command
+    cmds.extend_from_slice(&[0x1B, 0x61, 0x01]); // center align (no-op for full-width raster, but harmless)
+    cmds.push(0x1D);
+    cmds.push(0x76);
+    cmds.push(0x30);
+    cmds.push(0x00);
+    cmds.push((bytes_per_row & 0xFF) as u8);
+    cmds.push(((bytes_per_row >> 8) & 0xFF) as u8);
+    cmds.push((target_h & 0xFF) as u8);
+    cmds.push(((target_h >> 8) & 0xFF) as u8);
+    cmds.extend_from_slice(&bitmap);
+    cmds.extend_from_slice(&[0x1B, 0x61, 0x00]); // reset to left
 }
 
 /// Append a centered ASCII text line.
@@ -263,45 +387,3 @@ fn append_qr_code(cmds: &mut Vec<u8>, data: &str, size: u8) {
     cmds.extend_from_slice(&[0x1B, 0x61, 0x00]);
 }
 
-/// Get current timestamp as formatted string (DD/MM/YYYY, HH:MM).
-fn chrono_timestamp() -> String {
-    // Use std time since we don't want to add chrono as a dependency
-    // Format: epoch-based simple approach
-    let now = std::time::SystemTime::now();
-    let duration = now
-        .duration_since(std::time::UNIX_EPOCH)
-        .unwrap_or_default();
-    let secs = duration.as_secs();
-
-    // Simple UTC date/time calculation (sufficient for receipt timestamps)
-    // For proper timezone support, the frontend can pass the timestamp instead
-    let days = secs / 86400;
-    let time_of_day = secs % 86400;
-    let hours = (time_of_day / 3600) + 7; // +7 for Bangkok time (ICT)
-    let minutes = (time_of_day % 3600) / 60;
-
-    // Days since epoch to date (simplified Gregorian)
-    let (year, month, day) = days_to_ymd(days + if hours >= 24 { 1 } else { 0 });
-    let hours = hours % 24;
-
-    format!(
-        "{:02}/{:02}/{:04}, {:02}:{:02}",
-        day, month, year, hours, minutes
-    )
-}
-
-/// Convert days since Unix epoch to (year, month, day).
-fn days_to_ymd(mut days: u64) -> (u64, u64, u64) {
-    // Algorithm from http://howardhinnant.github.io/date_algorithms.html
-    days += 719468;
-    let era = days / 146097;
-    let doe = days - era * 146097;
-    let yoe = (doe - doe / 1460 + doe / 36524 - doe / 146096) / 365;
-    let y = yoe + era * 400;
-    let doy = doe - (365 * yoe + yoe / 4 - yoe / 100);
-    let mp = (5 * doy + 2) / 153;
-    let d = doy - (153 * mp + 2) / 5 + 1;
-    let m = if mp < 10 { mp + 3 } else { mp - 9 };
-    let y = if m <= 2 { y + 1 } else { y };
-    (y, m, d)
-}
