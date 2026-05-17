@@ -3,6 +3,7 @@ import type {
   AppConfig,
   CustomerLite,
   OrderDetail,
+  OrderEditPayload,
   OrderListRow,
   ProductLite,
   ReceiptData,
@@ -50,4 +51,6 @@ export const ordersApi = {
   get: (id: string) => invoke<OrderDetail | null>('get_order', { id }),
   print: (config: AppConfig, id: string) =>
     invoke<string>('print_order', { config, id }),
+  update: (id: string, payload: OrderEditPayload) =>
+    invoke<void>('update_order', { id, payload }),
 };

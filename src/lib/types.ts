@@ -51,6 +51,7 @@ export interface OrderListRow {
   orderDate: string;
   notes: string | null;
   itemsSummary: string;
+  syncLocked: boolean;
 }
 
 export interface OrderDetailItem {
@@ -77,7 +78,20 @@ export interface OrderDetail {
   printedAt: string | null;
   printCount: number;
   deletedAt: string | null;
+  syncLocked: boolean;
   items: OrderDetailItem[];
+}
+
+export interface OrderEditItem {
+  productId: string;
+  quantity: number;
+  unitPrice: number;
+}
+
+export interface OrderEditPayload {
+  items: OrderEditItem[];
+  discount: number;
+  deliveryFee: number;
 }
 
 // === Sync ===
