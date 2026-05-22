@@ -1,4 +1,6 @@
+import { Minus, Plus, Trash2 } from 'lucide-react';
 import type { CartItem } from '../lib/types';
+import { Button } from './ui/button';
 
 interface CartItemRowProps {
   item: CartItem;
@@ -10,41 +12,46 @@ export default function CartItemRow({ item, onUpdateQuantity, onRemove }: CartIt
   const lineTotal = item.product.sellingPrice * item.quantity;
 
   return (
-    <div className="flex items-center gap-2 py-2 border-b border-gray-700">
+    <div className="flex items-center gap-3 py-3 border-b border-border last:border-b-0">
       <div className="flex-1 min-w-0">
-        <div className="text-white text-sm font-medium truncate">
-          {item.product.nameTh}
-        </div>
-        <div className="text-gray-400 text-xs">
+        <div className="text-base font-medium leading-tight truncate">{item.product.nameTh}</div>
+        <div className="text-xs text-muted-foreground tabular-nums">
           ฿{item.product.sellingPrice.toFixed(0)} each
         </div>
       </div>
-      <div className="flex items-center gap-1">
-        <button
+      <div className="flex items-center gap-1.5">
+        <Button
+          variant="outline"
+          size="iconSm"
+          aria-label="Decrease quantity"
           onClick={() => onUpdateQuantity(item.product.id, item.quantity - 1)}
-          className="w-8 h-8 flex items-center justify-center bg-gray-600 hover:bg-gray-500 active:bg-gray-400 rounded text-white text-lg font-bold"
         >
-          -
-        </button>
-        <span className="w-8 text-center text-white font-medium">
+          <Minus className="h-4 w-4" />
+        </Button>
+        <span className="w-8 text-center text-base font-semibold tabular-nums">
           {item.quantity}
         </span>
-        <button
+        <Button
+          variant="outline"
+          size="iconSm"
+          aria-label="Increase quantity"
           onClick={() => onUpdateQuantity(item.product.id, item.quantity + 1)}
-          className="w-8 h-8 flex items-center justify-center bg-gray-600 hover:bg-gray-500 active:bg-gray-400 rounded text-white text-lg font-bold"
         >
-          +
-        </button>
+          <Plus className="h-4 w-4" />
+        </Button>
       </div>
-      <div className="w-16 text-right text-white font-medium text-sm">
+      <div className="w-20 text-right text-base font-semibold tabular-nums">
         ฿{lineTotal.toFixed(0)}
       </div>
-      <button
+      <Button
+        variant="ghost"
+        size="iconSm"
+        aria-label="Remove item"
         onClick={() => onRemove(item.product.id)}
-        className="w-8 h-8 flex items-center justify-center text-red-400 hover:text-red-300 hover:bg-gray-600 rounded"
+        className="text-muted-foreground hover:text-destructive"
       >
-        ✕
-      </button>
+        <Trash2 className="h-4 w-4" />
+      </Button>
     </div>
   );
 }

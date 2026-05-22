@@ -1,6 +1,9 @@
+import { ShoppingCart } from 'lucide-react';
 import { useCartStore } from '../stores/cart';
 import CartItemRow from './CartItemRow';
 import CustomerSearch from './CustomerSearch';
+import { Button } from './ui/button';
+import { Separator } from './ui/separator';
 
 interface CartProps {
   onCharge: () => void;
@@ -18,11 +21,11 @@ export default function Cart({ onCharge }: CartProps) {
 
   const subtotal = getSubtotal();
   const total = getTotal();
+  const itemCount = items.reduce((s, i) => s + i.quantity, 0);
 
   return (
-    <div className="flex flex-col h-full bg-gray-800">
-      {/* Customer search */}
-      <div className="p-3 border-b border-gray-700">
+    <div className="flex flex-col h-full bg-card">
+      <div className="p-4 border-b border-border">
         <CustomerSearch
           customerName={customerName}
           onSelect={(id, name) => setCustomer(id, name)}
@@ -30,11 +33,11 @@ export default function Cart({ onCharge }: CartProps) {
         />
       </div>
 
-      {/* Cart items */}
-      <div className="flex-1 overflow-y-auto px-3">
+      <div className="flex-1 overflow-y-auto px-4 scrollbar-thin">
         {items.length === 0 ? (
-          <div className="flex items-center justify-center h-full text-gray-500 text-sm">
-            Tap a product to add to cart
+          <div className="flex flex-col items-center justify-center h-full text-muted-foreground gap-3">
+            <ShoppingCart className="h-10 w-10 opacity-40" />
+            <p className="text-sm">Tap a product to add it to the cart</p>
           </div>
         ) : (
           items.map((item) => (
@@ -48,32 +51,33 @@ export default function Cart({ onCharge }: CartProps) {
         )}
       </div>
 
-      {/* Totals and charge */}
-      <div className="border-t border-gray-700 p-3 space-y-2">
-        <div className="flex justify-between text-gray-400 text-sm">
-          <span>Subtotal ({items.reduce((s, i) => s + i.quantity, 0)} items)</span>
-          <span>฿{subtotal.toFixed(2)}</span>
+      <div className="border-t border-border p-4 space-y-3 bg-card">
+        <div className="flex justify-between text-sm text-muted-foreground">
+          <span>
+            Subtotal · {itemCount} item{itemCount === 1 ? '' : 's'}
+          </span>
+          <span className="tabular-nums">฿{subtotal.toFixed(2)}</span>
         </div>
-        <div className="flex justify-between text-white text-lg font-bold">
+        <div className="flex justify-between text-lg font-bold">
           <span>Total</span>
-          <span>฿{total.toFixed(2)}</span>
+          <span className="tabular-nums">฿{total.toFixed(2)}</span>
         </div>
+        <Separator />
         <div className="flex gap-2">
           {items.length > 0 && (
-            <button
-              onClick={clear}
-              className="px-4 py-3 bg-gray-600 hover:bg-gray-500 text-white rounded-lg font-medium text-sm"
-            >
+            <Button variant="secondary" size="lg" onClick={clear}>
               Clear
-            </button>
+            </Button>
           )}
-          <button
+          <Button
+            variant="success"
+            size="lg"
             onClick={onCharge}
             disabled={items.length === 0}
-            className="flex-1 py-3 bg-green-600 hover:bg-green-500 active:bg-green-400 disabled:bg-gray-600 disabled:text-gray-400 text-white rounded-lg font-bold text-lg transition-colors"
+            className="flex-1 text-xl font-bold tracking-tight"
           >
-            CHARGE ฿{total.toFixed(0)}
-          </button>
+            Charge ฿{total.toFixed(0)}
+          </Button>
         </div>
       </div>
     </div>

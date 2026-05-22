@@ -1,8 +1,20 @@
 import { useState } from 'react';
+import { Printer } from 'lucide-react';
 import { useCartStore, type DiscountType } from '../stores/cart';
 import NumPad from './NumPad';
 import { printer as tauriPrinter } from '../lib/tauri';
 import type { AppConfig, PrinterConfig, ReceiptData } from '../lib/types';
+import { Button } from './ui/button';
+import { Label } from './ui/label';
+import {
+  Dialog,
+  DialogContent,
+  DialogFooter,
+  DialogHeader,
+  DialogTitle,
+} from './ui/dialog';
+import { Separator } from './ui/separator';
+import { cn } from '../lib/cn';
 
 interface PaymentDialogProps {
   onClose: () => void;
@@ -51,7 +63,8 @@ export default function PaymentDialog({ onClose, appConfig }: PaymentDialogProps
           quantity: i.quantity,
           price: i.product.sellingPrice,
         })),
-        discountType: discountType === 'none' ? 'none' : discountType === 'percentage' ? 'percentage' : 'fixed',
+        discountType:
+          discountType === 'none' ? 'none' : discountType === 'percentage' ? 'percentage' : 'fixed',
         discount: discountValue,
         deliveryFee,
       };
@@ -79,140 +92,138 @@ export default function PaymentDialog({ onClose, appConfig }: PaymentDialogProps
 
   const openNumPad = (target: 'discount' | 'delivery') => {
     setNumPadTarget(target);
-    setNumPadValue(target === 'discount' ? String(discountValue || '') : String(deliveryFee || ''));
+    setNumPadValue(
+      target === 'discount' ? String(discountValue || '') : String(deliveryFee || ''),
+    );
   };
 
   const confirmNumPad = () => {
     const val = parseFloat(numPadValue) || 0;
-    if (numPadTarget === 'discount') {
-      setDiscount(discountType, val);
-    } else if (numPadTarget === 'delivery') {
-      setDeliveryFee(val);
-    }
+    if (numPadTarget === 'discount') setDiscount(discountType, val);
+    else if (numPadTarget === 'delivery') setDeliveryFee(val);
     setNumPadTarget(null);
   };
 
   return (
-    <div className="fixed inset-0 bg-black/60 flex items-center justify-center z-40" onClick={onClose}>
-      <div
-        className="bg-gray-800 rounded-xl w-[420px] max-h-[90vh] overflow-y-auto shadow-2xl"
-        onClick={(e) => e.stopPropagation()}
-      >
-        {/* Header */}
-        <div className="flex items-center justify-between p-4 border-b border-gray-700">
-          <h2 className="text-white text-lg font-bold">Payment</h2>
-          <button onClick={onClose} className="text-gray-400 hover:text-white text-xl">
-            ✕
-          </button>
-        </div>
+    <Dialog open onOpenChange={(open) => !open && !saving && onClose()}>
+      <DialogContent className="sm:max-w-md max-h-[90vh] overflow-y-auto">
+        <DialogHeader>
+          <DialogTitle>Payment</DialogTitle>
+        </DialogHeader>
 
-        {/* Order summary */}
-        <div className="p-4 space-y-1 border-b border-gray-700">
-          <div className="text-gray-400 text-sm mb-2">
-            Customer: <span className="text-white">{customerName || 'Not selected'}</span>
-          </div>
-          {items.map((item) => (
-            <div key={item.product.id} className="flex justify-between text-sm">
-              <span className="text-gray-300">
-                {item.product.nameTh} x{item.quantity}
-              </span>
-              <span className="text-white">
-                ฿{(item.product.sellingPrice * item.quantity).toFixed(0)}
-              </span>
+        <div className="space-y-4">
+          <div>
+            <div className="text-xs uppercase tracking-wide text-muted-foreground mb-1">
+              Customer
             </div>
-          ))}
-        </div>
-
-        {/* Discount */}
-        <div className="p-4 border-b border-gray-700 space-y-2">
-          <div className="text-gray-400 text-sm">Discount</div>
-          <div className="flex gap-2">
-            {(['none', 'percentage', 'amount'] as DiscountType[]).map((t) => (
-              <button
-                key={t}
-                onClick={() => setDiscount(t, t === 'none' ? 0 : discountValue)}
-                className={`px-3 py-1.5 rounded text-sm font-medium ${
-                  discountType === t
-                    ? 'bg-blue-600 text-white'
-                    : 'bg-gray-700 text-gray-300 hover:bg-gray-600'
-                }`}
-              >
-                {t === 'none' ? 'None' : t === 'percentage' ? '%' : '฿'}
-              </button>
-            ))}
-            {discountType !== 'none' && (
-              <button
-                onClick={() => openNumPad('discount')}
-                className="flex-1 bg-gray-700 hover:bg-gray-600 text-white rounded px-3 py-1.5 text-sm text-right"
-              >
-                {discountValue || 'Set value'}
-              </button>
-            )}
+            <div className="font-medium">{customerName || 'Not selected'}</div>
           </div>
-        </div>
 
-        {/* Delivery fee */}
-        <div className="p-4 border-b border-gray-700">
-          <div className="flex items-center justify-between">
-            <span className="text-gray-400 text-sm">Delivery fee</span>
-            <button
+          <Separator />
+
+          <div className="space-y-1.5">
+            {items.map((item) => (
+              <div
+                key={item.product.id}
+                className="flex justify-between text-sm tabular-nums"
+              >
+                <span className="text-muted-foreground">
+                  {item.product.nameTh} × {item.quantity}
+                </span>
+                <span>฿{(item.product.sellingPrice * item.quantity).toFixed(0)}</span>
+              </div>
+            ))}
+          </div>
+
+          <Separator />
+
+          <div className="space-y-2">
+            <Label>Discount</Label>
+            <div className="flex gap-2 flex-wrap">
+              {(['none', 'percentage', 'amount'] as DiscountType[]).map((t) => (
+                <Button
+                  key={t}
+                  variant={discountType === t ? 'default' : 'outline'}
+                  size="sm"
+                  onClick={() => setDiscount(t, t === 'none' ? 0 : discountValue)}
+                >
+                  {t === 'none' ? 'None' : t === 'percentage' ? '%' : '฿'}
+                </Button>
+              ))}
+              {discountType !== 'none' && (
+                <Button
+                  variant="outline"
+                  size="sm"
+                  className={cn('flex-1 justify-end tabular-nums')}
+                  onClick={() => openNumPad('discount')}
+                >
+                  {discountValue || 'Set value'}
+                </Button>
+              )}
+            </div>
+          </div>
+
+          <div className="flex items-center justify-between gap-3">
+            <Label>Delivery fee</Label>
+            <Button
+              variant="outline"
+              size="sm"
+              className="tabular-nums min-w-[6rem]"
               onClick={() => openNumPad('delivery')}
-              className="bg-gray-700 hover:bg-gray-600 text-white rounded px-4 py-1.5 text-sm"
             >
               ฿{deliveryFee.toFixed(0)}
-            </button>
+            </Button>
           </div>
-        </div>
 
-        {/* Totals */}
-        <div className="p-4 space-y-1 border-b border-gray-700">
-          <div className="flex justify-between text-sm text-gray-400">
-            <span>Subtotal</span>
-            <span>฿{subtotal.toFixed(2)}</span>
+          <Separator />
+
+          <div className="space-y-1.5">
+            <div className="flex justify-between text-sm text-muted-foreground tabular-nums">
+              <span>Subtotal</span>
+              <span>฿{subtotal.toFixed(2)}</span>
+            </div>
+            {discountAmount > 0 && (
+              <div className="flex justify-between text-sm text-destructive tabular-nums">
+                <span>Discount</span>
+                <span>−฿{discountAmount.toFixed(2)}</span>
+              </div>
+            )}
+            {deliveryFee > 0 && (
+              <div className="flex justify-between text-sm text-muted-foreground tabular-nums">
+                <span>Delivery</span>
+                <span>฿{deliveryFee.toFixed(2)}</span>
+              </div>
+            )}
+            <div className="flex justify-between text-xl font-bold tabular-nums pt-1">
+              <span>Total</span>
+              <span>฿{total.toFixed(2)}</span>
+            </div>
           </div>
-          {discountAmount > 0 && (
-            <div className="flex justify-between text-sm text-red-400">
-              <span>Discount</span>
-              <span>-฿{discountAmount.toFixed(2)}</span>
+
+          {error && (
+            <div className="rounded-md bg-destructive/10 text-destructive px-3 py-2 text-sm">
+              {error}
             </div>
           )}
-          {deliveryFee > 0 && (
-            <div className="flex justify-between text-sm text-gray-400">
-              <span>Delivery</span>
-              <span>฿{deliveryFee.toFixed(2)}</span>
-            </div>
-          )}
-          <div className="flex justify-between text-white text-xl font-bold pt-1">
-            <span>Total</span>
-            <span>฿{total.toFixed(2)}</span>
-          </div>
         </div>
 
-        {/* Error */}
-        {error && (
-          <div className="px-4 pt-3 text-red-400 text-sm">{error}</div>
-        )}
-
-        {/* Actions */}
-        <div className="p-4 flex gap-2">
-          <button
-            onClick={onClose}
-            disabled={saving}
-            className="px-4 py-3 bg-gray-700 hover:bg-gray-600 disabled:bg-gray-800 text-gray-300 rounded-lg font-medium"
-          >
+        <DialogFooter className="gap-2">
+          <Button variant="secondary" size="lg" onClick={onClose} disabled={saving}>
             Cancel
-          </button>
-          <button
+          </Button>
+          <Button
+            variant="success"
+            size="lg"
             onClick={handlePrint}
             disabled={saving}
-            className="flex-1 py-3 bg-green-600 hover:bg-green-500 disabled:bg-gray-600 text-white rounded-lg font-medium"
+            className="flex-1"
           >
-            {saving ? 'Printing...' : 'Print Receipt'}
-          </button>
-        </div>
-      </div>
+            <Printer className="h-5 w-5" />
+            {saving ? 'Printing…' : 'Print receipt'}
+          </Button>
+        </DialogFooter>
+      </DialogContent>
 
-      {/* NumPad overlay */}
       {numPadTarget && (
         <NumPad
           label={numPadTarget === 'discount' ? 'Discount value' : 'Delivery fee (฿)'}
@@ -222,6 +233,6 @@ export default function PaymentDialog({ onClose, appConfig }: PaymentDialogProps
           onClose={() => setNumPadTarget(null)}
         />
       )}
-    </div>
+    </Dialog>
   );
 }

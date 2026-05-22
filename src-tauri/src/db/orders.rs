@@ -22,8 +22,15 @@ pub struct OrderRow {
     pub printed_at: Option<String>,
     pub print_count: i64,
     pub deleted_at: Option<String>,
+    pub sync_locked: i64,
     pub created_at: String,
     pub updated_at: String,
+}
+
+pub struct EditOrderItem {
+    pub product_id: String,
+    pub quantity: i64,
+    pub unit_price: i64,
 }
 
 #[derive(Debug, Serialize, Deserialize, Clone, sqlx::FromRow)]
@@ -72,25 +79,32 @@ pub async fn upsert_from_source(
 ) -> Result<UpsertOutcome, sqlx::Error> {
     let now = now_iso();
 
-    let existing: Option<(String, String)> = sqlx::query_as(
-        r#"SELECT id, order_number FROM "order" WHERE source_tab = ? AND source_row = ?"#,
+    let existing: Option<(String, String, i64)> = sqlx::query_as(
+        r#"SELECT id, order_number, sync_locked FROM "order"
+           WHERE source_tab = ? AND source_row = ?"#,
     )
     .bind(input.source_tab).bind(input.source_row)
     .fetch_optional(&mut **tx).await?;
 
     let (order_id, order_number, was_insert) = match existing {
-        Some((id, num)) => {
-            sqlx::query(
-                r#"UPDATE "order" SET
-                     customer_id = ?, channel = ?, delivery_location = ?, notes = ?,
-                     total_amount = ?, order_date = ?, synced_at = ?, updated_at = ?,
-                     deleted_at = NULL
-                   WHERE id = ?"#,
-            )
-            .bind(input.customer_id).bind(input.channel).bind(input.delivery_location)
-            .bind(input.notes).bind(input.total_amount).bind(input.order_date)
-            .bind(&now).bind(&now).bind(&id)
-            .execute(&mut **tx).await?;
+        Some((id, num, locked)) => {
+            if locked == 0 {
+                sqlx::query(
+                    r#"UPDATE "order" SET
+                         customer_id = ?, channel = ?, delivery_location = ?, notes = ?,
+                         total_amount = ?, order_date = ?, synced_at = ?, updated_at = ?,
+                         deleted_at = NULL
+                       WHERE id = ?"#,
+                )
+                .bind(input.customer_id).bind(input.channel).bind(input.delivery_location)
+                .bind(input.notes).bind(input.total_amount).bind(input.order_date)
+                .bind(&now).bind(&now).bind(&id)
+                .execute(&mut **tx).await?;
+            }
+            // Locked rows: skip the UPDATE entirely so the user's edits stay
+            // intact. We still return was_insert=false so the caller counts the
+            // row as "kept" rather than "new" — that drives the soft-delete
+            // bookkeeping below.
             (id, num, false)
         }
         None => {
@@ -122,16 +136,24 @@ pub async fn upsert_from_source(
         }
     };
 
-    sqlx::query(r#"DELETE FROM order_item WHERE order_id = ?"#)
-        .bind(&order_id).execute(&mut **tx).await?;
-    for item in input.items {
-        sqlx::query(
-            r#"INSERT INTO order_item (id, order_id, product_id, quantity, unit_price)
-               VALUES (?, ?, ?, ?, ?)"#,
-        )
-        .bind(new_id()).bind(&order_id).bind(item.product_id)
-        .bind(item.quantity).bind(item.unit_price)
-        .execute(&mut **tx).await?;
+    // Locked rows keep their items as-is. Refresh them only when the row is
+    // either brand new or being updated from the sheet.
+    let is_locked: (i64,) = sqlx::query_as(
+        r#"SELECT sync_locked FROM "order" WHERE id = ?"#,
+    )
+    .bind(&order_id).fetch_one(&mut **tx).await?;
+    if is_locked.0 == 0 {
+        sqlx::query(r#"DELETE FROM order_item WHERE order_id = ?"#)
+            .bind(&order_id).execute(&mut **tx).await?;
+        for item in input.items {
+            sqlx::query(
+                r#"INSERT INTO order_item (id, order_id, product_id, quantity, unit_price)
+                   VALUES (?, ?, ?, ?, ?)"#,
+            )
+            .bind(new_id()).bind(&order_id).bind(item.product_id)
+            .bind(item.quantity).bind(item.unit_price)
+            .execute(&mut **tx).await?;
+        }
     }
 
     Ok(UpsertOutcome { order_id, order_number, was_insert })
@@ -142,17 +164,21 @@ pub async fn soft_delete_missing_rows(
     tab: &str,
     keep_rows: &[i64],
 ) -> Result<i64, sqlx::Error> {
+    // Locked rows are always preserved here — the cashier asked us to keep
+    // their edited version even if the sheet no longer references it.
+    //
     // When keep_rows is empty we want to soft-delete every live row for the
-    // tab. Building `NOT IN (NULL)` would silently match nothing in SQLite,
-    // so drop the predicate entirely instead.
+    // tab (still respecting sync_locked). Building `NOT IN (NULL)` would
+    // silently match nothing in SQLite, so drop that predicate entirely.
     let sql = if keep_rows.is_empty() {
         r#"UPDATE "order" SET deleted_at = ?, updated_at = ?
-           WHERE source_tab = ? AND deleted_at IS NULL"#.to_string()
+           WHERE source_tab = ? AND deleted_at IS NULL AND sync_locked = 0"#.to_string()
     } else {
         let placeholders = keep_rows.iter().map(|_| "?").collect::<Vec<_>>().join(",");
         format!(
             r#"UPDATE "order" SET deleted_at = ?, updated_at = ?
-               WHERE source_tab = ? AND deleted_at IS NULL AND source_row NOT IN ({})"#,
+               WHERE source_tab = ? AND deleted_at IS NULL AND sync_locked = 0
+                 AND source_row NOT IN ({})"#,
             placeholders
         )
     };
@@ -188,6 +214,45 @@ pub async fn get_with_items(
         "SELECT * FROM order_item WHERE order_id = ? ORDER BY id"
     ).bind(id).fetch_all(pool).await?;
     Ok(Some((order, items)))
+}
+
+/// Apply a manual edit to an order. Replaces the line items, recomputes the
+/// total as `subtotal - discount + delivery_fee`, and flips `sync_locked = 1`
+/// so future syncs from the sheet leave this row alone.
+pub async fn apply_order_edit(
+    pool: &SqlitePool,
+    order_id: &str,
+    items: &[EditOrderItem],
+    discount: i64,
+    delivery_fee: i64,
+) -> Result<(), sqlx::Error> {
+    let subtotal: i64 = items.iter().map(|i| i.quantity * i.unit_price).sum();
+    let total = (subtotal - discount + delivery_fee).max(0);
+    let now = now_iso();
+    let mut tx = pool.begin().await?;
+
+    sqlx::query(
+        r#"UPDATE "order" SET
+             total_amount = ?, discount = ?, delivery_fee = ?,
+             sync_locked = 1, updated_at = ?
+           WHERE id = ?"#,
+    )
+    .bind(total).bind(discount).bind(delivery_fee).bind(&now).bind(order_id)
+    .execute(&mut *tx).await?;
+
+    sqlx::query(r#"DELETE FROM order_item WHERE order_id = ?"#)
+        .bind(order_id).execute(&mut *tx).await?;
+    for it in items {
+        sqlx::query(
+            r#"INSERT INTO order_item (id, order_id, product_id, quantity, unit_price)
+               VALUES (?, ?, ?, ?, ?)"#,
+        )
+        .bind(new_id()).bind(order_id).bind(&it.product_id)
+        .bind(it.quantity).bind(it.unit_price)
+        .execute(&mut *tx).await?;
+    }
+    tx.commit().await?;
+    Ok(())
 }
 
 pub async fn mark_printed(pool: &SqlitePool, id: &str) -> Result<(), sqlx::Error> {
@@ -353,6 +418,106 @@ mod tests {
         assert_eq!(n, 2);
         let alive = list_by_tab(&pool, Some("Order_30"), false, 100).await.unwrap();
         assert_eq!(alive.len(), 0);
+    }
+
+    #[tokio::test]
+    async fn sync_locked_order_is_not_overwritten_by_upsert_and_is_kept() {
+        // When the cashier edits an order locally we set sync_locked = 1. After
+        // that flag is on, a re-sync from the sheet must:
+        //   1. recognise the row as existing (no insert), but
+        //   2. leave items, total, discount, delivery_fee untouched, and
+        //   3. NOT soft-delete the row even if the sheet no longer carries it.
+        let pool = init_memory_pool().await.unwrap();
+        let (p, c) = seed_pc(&pool).await;
+
+        let mut tx = pool.begin().await.unwrap();
+        let out = upsert_from_source(&mut tx, UpsertOrderInput {
+            customer_id: &c.id, channel: Some("Page"),
+            delivery_location: None, notes: None,
+            total_amount: 85, order_date: "2026-05-11",
+            source_tab: "Order_30", source_row: 11,
+            items: vec![UpsertOrderItemInput { product_id: &p.id, quantity: 1, unit_price: 85 }],
+        }).await.unwrap();
+        tx.commit().await.unwrap();
+
+        // Cashier edits the order: bump qty and add a delivery fee. We model this
+        // here as a direct write — the higher-level update_order command will use
+        // the same code path.
+        sqlx::query(
+            r#"UPDATE "order"
+               SET sync_locked = 1, total_amount = 210, delivery_fee = 40,
+                   updated_at = ?
+               WHERE id = ?"#,
+        )
+        .bind(now_iso()).bind(&out.order_id)
+        .execute(&pool).await.unwrap();
+        sqlx::query(r#"DELETE FROM order_item WHERE order_id = ?"#)
+            .bind(&out.order_id).execute(&pool).await.unwrap();
+        sqlx::query(
+            r#"INSERT INTO order_item (id, order_id, product_id, quantity, unit_price)
+               VALUES (?, ?, ?, ?, ?)"#,
+        )
+        .bind(new_id()).bind(&out.order_id).bind(&p.id).bind(2_i64).bind(85_i64)
+        .execute(&pool).await.unwrap();
+
+        // A subsequent sync tries to push qty back to 1 — locked row must ignore it.
+        let mut tx = pool.begin().await.unwrap();
+        let out2 = upsert_from_source(&mut tx, UpsertOrderInput {
+            customer_id: &c.id, channel: Some("Page"),
+            delivery_location: None, notes: Some("from sheet"),
+            total_amount: 85, order_date: "2026-05-11",
+            source_tab: "Order_30", source_row: 11,
+            items: vec![UpsertOrderItemInput { product_id: &p.id, quantity: 1, unit_price: 85 }],
+        }).await.unwrap();
+        tx.commit().await.unwrap();
+        assert!(!out2.was_insert, "locked row must be recognised as existing");
+
+        let (ord, items) = get_with_items(&pool, &out.order_id).await.unwrap().unwrap();
+        assert_eq!(ord.total_amount, 210, "locked total must not be overwritten");
+        assert_eq!(ord.delivery_fee, 40, "locked delivery_fee must not be overwritten");
+        assert_eq!(items.len(), 1);
+        assert_eq!(items[0].quantity, 2, "locked items must not be overwritten");
+        assert_eq!(ord.sync_locked, 1);
+
+        // Sheet drops the row entirely: locked row must NOT be soft-deleted.
+        let mut tx = pool.begin().await.unwrap();
+        let n = soft_delete_missing_rows(&mut tx, "Order_30", &[]).await.unwrap();
+        tx.commit().await.unwrap();
+        assert_eq!(n, 0, "locked rows must be excluded from soft-delete");
+        let alive = list_by_tab(&pool, Some("Order_30"), false, 100).await.unwrap();
+        assert_eq!(alive.len(), 1, "locked row should still be alive after soft delete");
+    }
+
+    #[tokio::test]
+    async fn apply_order_edit_replaces_items_and_locks_sync() {
+        // The update_order command rebuilds items, recomputes total from
+        // subtotal - discount + delivery_fee, and flips sync_locked on.
+        let pool = init_memory_pool().await.unwrap();
+        let (p, c) = seed_pc(&pool).await;
+        let p2 = crate::db::products::create(&pool, "ขนมปังกล้วย", None, 60).await.unwrap();
+
+        let mut tx = pool.begin().await.unwrap();
+        let out = upsert_from_source(&mut tx, UpsertOrderInput {
+            customer_id: &c.id, channel: None, delivery_location: None, notes: None,
+            total_amount: 85, order_date: "2026-05-11",
+            source_tab: "Order_30", source_row: 11,
+            items: vec![UpsertOrderItemInput { product_id: &p.id, quantity: 1, unit_price: 85 }],
+        }).await.unwrap();
+        tx.commit().await.unwrap();
+
+        let edit_items = vec![
+            EditOrderItem { product_id: p.id.clone(), quantity: 3, unit_price: 85 },
+            EditOrderItem { product_id: p2.id.clone(), quantity: 2, unit_price: 60 },
+        ];
+        apply_order_edit(&pool, &out.order_id, &edit_items, 25, 30).await.unwrap();
+
+        let (ord, items) = get_with_items(&pool, &out.order_id).await.unwrap().unwrap();
+        // subtotal = 3*85 + 2*60 = 375. total = 375 - 25 + 30 = 380.
+        assert_eq!(ord.total_amount, 380);
+        assert_eq!(ord.discount, 25);
+        assert_eq!(ord.delivery_fee, 30);
+        assert_eq!(ord.sync_locked, 1);
+        assert_eq!(items.len(), 2);
     }
 
     #[tokio::test]

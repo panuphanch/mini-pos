@@ -1,13 +1,27 @@
 import { useCallback, useEffect, useState } from 'react';
+import { AlertCircle, CheckCircle2, RefreshCw } from 'lucide-react';
 import { sheets } from '../lib/tauri';
-import type { AppConfig, SyncMappings, SyncPreview, SyncResult, TabStrategy } from '../lib/types';
+import type {
+  AppConfig,
+  SyncMappings,
+  SyncPreview,
+  SyncResult,
+  TabStrategy,
+} from '../lib/types';
 import MappingForm from '../components/MappingForm';
+import { Button } from '../components/ui/button';
+import {
+  Select,
+  SelectContent,
+  SelectItem,
+  SelectTrigger,
+  SelectValue,
+} from '../components/ui/select';
 
 interface SyncPageProps {
   appConfig: AppConfig | null;
 }
 
-// ISO 8601 week number (Thursday-anchored). Matches `Order_NN` tab naming.
 function isoWeekNumber(date: Date): number {
   const d = new Date(Date.UTC(date.getFullYear(), date.getMonth(), date.getDate()));
   d.setUTCDate(d.getUTCDate() + 4 - (d.getUTCDay() || 7));
@@ -15,9 +29,6 @@ function isoWeekNumber(date: Date): number {
   return Math.ceil(((d.getTime() - yearStart.getTime()) / 86400000 + 1) / 7);
 }
 
-// Pick which tab to preselect, honoring the user's defaultTabStrategy setting.
-// Every branch falls back silently to the leftmost tab when no match is found —
-// the wife's convention is that the leftmost tab is the current week.
 function pickDefaultTab(names: string[], strategy: TabStrategy): string {
   if (names.length === 0) return '';
   if (strategy === 'latest') return names[0];
@@ -42,7 +53,9 @@ export default function SyncPage({ appConfig }: SyncPageProps) {
       setError('Configure Spreadsheet ID and service account in Settings');
       return;
     }
-    setBusy(true); setError(''); setMessage('');
+    setBusy(true);
+    setError('');
+    setMessage('');
     try {
       const result = await sheets.testConnection(appConfig);
       const names = result.map((t) => t.name);
@@ -57,16 +70,20 @@ export default function SyncPage({ appConfig }: SyncPageProps) {
     }
   }, [appConfig, selectedTab]);
 
-  useEffect(() => { loadTabs(); }, [loadTabs]);
+  useEffect(() => {
+    loadTabs();
+  }, [loadTabs]);
 
   const runSync = async () => {
     if (!appConfig || !selectedTab) return;
-    setBusy(true); setError(''); setMessage(''); setPreview(null);
+    setBusy(true);
+    setError('');
+    setMessage('');
+    setPreview(null);
     try {
       const p = await sheets.syncWeek(appConfig, selectedTab);
       setPreview(p);
       if (p.unknownMenus.length === 0 && p.unknownCustomers.length === 0) {
-        // No unknowns — apply immediately with empty mappings.
         await doApply({ menu: [], customer: [] }, p);
       }
     } catch (e) {
@@ -78,10 +95,13 @@ export default function SyncPage({ appConfig }: SyncPageProps) {
 
   const doApply = async (mappings: SyncMappings, p: SyncPreview) => {
     if (!appConfig) return;
-    setApplying(true); setError('');
+    setApplying(true);
+    setError('');
     try {
       const res: SyncResult = await sheets.applySync(appConfig, p.tab, mappings);
-      setMessage(`Synced ${p.tab}: +${res.rowsAdded} new, ~${res.rowsUpdated} updated, −${res.rowsSoftDeleted} removed`);
+      setMessage(
+        `Synced ${p.tab}: +${res.rowsAdded} new · ~${res.rowsUpdated} updated · −${res.rowsSoftDeleted} removed`,
+      );
       setPreview(null);
     } catch (e) {
       setError(e instanceof Error ? e.message : String(e));
@@ -91,31 +111,48 @@ export default function SyncPage({ appConfig }: SyncPageProps) {
   };
 
   return (
-    <div className="h-full bg-gray-900 flex flex-col">
-      <header className="p-4 border-b border-gray-700 flex items-center gap-3">
-        <h2 className="text-white text-xl font-bold flex-1">Sync from Google Sheet</h2>
-        <select
-          value={selectedTab}
-          onChange={(e) => setSelectedTab(e.target.value)}
-          className="px-3 py-2 bg-gray-800 border border-gray-700 rounded-lg text-white text-sm"
-        >
-          {tabs.map((t) => <option key={t} value={t}>{t}</option>)}
-        </select>
-        <button onClick={loadTabs} disabled={busy}
-          className="px-3 py-2 bg-gray-700 hover:bg-gray-600 text-white rounded-lg text-sm">
+    <div className="h-full bg-background flex flex-col">
+      <header className="p-5 border-b border-border flex flex-wrap items-end gap-3">
+        <div className="flex-1 min-w-0">
+          <h1 className="text-2xl font-bold tracking-tight">Sync from Google Sheet</h1>
+          <p className="text-sm text-muted-foreground mt-1">
+            Pull weekly order tabs into the local database.
+          </p>
+        </div>
+        <div className="w-56">
+          <Select value={selectedTab} onValueChange={setSelectedTab}>
+            <SelectTrigger>
+              <SelectValue placeholder="Choose tab" />
+            </SelectTrigger>
+            <SelectContent>
+              {tabs.map((t) => (
+                <SelectItem key={t} value={t}>
+                  {t}
+                </SelectItem>
+              ))}
+            </SelectContent>
+          </Select>
+        </div>
+        <Button variant="outline" onClick={loadTabs} disabled={busy}>
+          <RefreshCw className="h-4 w-4" />
           Refresh tabs
-        </button>
-        <button onClick={runSync} disabled={busy || !selectedTab}
-          className="px-4 py-2 bg-blue-600 hover:bg-blue-500 disabled:bg-gray-700 disabled:text-gray-500 text-white rounded-lg text-sm">
+        </Button>
+        <Button onClick={runSync} disabled={busy || !selectedTab}>
           Sync now
-        </button>
+        </Button>
       </header>
 
       {error && (
-        <div className="bg-red-900/60 text-red-200 px-4 py-2 text-sm">{error}</div>
+        <div className="flex items-start gap-2 bg-destructive/10 text-destructive px-5 py-2.5 text-sm border-b border-destructive/30">
+          <AlertCircle className="h-4 w-4 mt-0.5 shrink-0" />
+          <span>{error}</span>
+        </div>
       )}
       {message && (
-        <div className="bg-green-900/60 text-green-200 px-4 py-2 text-sm">{message}</div>
+        <div className="flex items-start gap-2 bg-success/10 text-success px-5 py-2.5 text-sm border-b border-success/30">
+          <CheckCircle2 className="h-4 w-4 mt-0.5 shrink-0" />
+          <span>{message}</span>
+        </div>
       )}
 
       <div className="flex-1 overflow-hidden">
@@ -127,7 +164,7 @@ export default function SyncPage({ appConfig }: SyncPageProps) {
             onCancel={() => setPreview(null)}
           />
         ) : (
-          <div className="p-4 text-gray-400 text-sm">
+          <div className="p-6 text-muted-foreground text-sm">
             {busy ? 'Working…' : 'Pick a tab and click Sync now.'}
           </div>
         )}
