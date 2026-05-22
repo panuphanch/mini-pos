@@ -2,7 +2,7 @@ import { useEffect, useMemo, useState } from 'react';
 import { Minus, Plus, Trash2 } from 'lucide-react';
 import { ordersApi, catalog } from '../lib/tauri';
 import type { OrderDetail } from '../lib/types';
-import { computeOrderTotals, type EditableItem } from '../lib/orderEdit';
+import { buildUpdatePayload, computeOrderTotals, type EditableItem } from '../lib/orderEdit';
 import { useToast } from '../lib/toast';
 import { Button } from './ui/button';
 import { Input } from './ui/input';
@@ -69,24 +69,15 @@ export default function EditOrderDialog({ detail, onClose, onSaved }: EditOrderD
   };
 
   const handleSave = async () => {
-    if (items.length === 0) {
-      setError('Order must have at least one item');
+    const result = buildUpdatePayload(items, discount, deliveryFee);
+    if (!result.ok) {
+      setError(result.error);
       return;
     }
     setSaving(true);
     setError('');
     try {
-      await ordersApi.update(detail.id, {
-        items: items
-          .filter((it) => it.quantity > 0)
-          .map((it) => ({
-            productId: it.productId,
-            quantity: it.quantity,
-            unitPrice: it.unitPrice,
-          })),
-        discount,
-        deliveryFee,
-      });
+      await ordersApi.update(detail.id, result.payload);
       toast({
         title: 'Order updated',
         description: `${detail.orderNumber} marked sync-locked.`,
