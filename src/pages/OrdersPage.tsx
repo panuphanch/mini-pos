@@ -53,6 +53,40 @@ export default function OrdersPage({ appConfig }: OrdersPageProps) {
   const [editingLoading, setEditingLoading] = useState<string | null>(null);
   const [deletingId, setDeletingId] = useState<string | null>(null);
   const [deletingTarget, setDeletingTarget] = useState<OrderListRow | null>(null);
+  const [selectedIds, setSelectedIds] = useState<Set<string>>(new Set());
+  const [merging, setMerging] = useState(false);
+  const [mergeConfirm, setMergeConfirm] = useState<OrderListRow[] | null>(null);
+
+  const toggleSelect = (id: string) => {
+    setSelectedIds((prev) => {
+      const next = new Set(prev);
+      if (next.has(id)) next.delete(id);
+      else next.add(id);
+      return next;
+    });
+  };
+
+  const openMergeConfirm = () => {
+    const selected = orders.filter((o) => selectedIds.has(o.id));
+    if (selected.length < 2) return;
+    setMergeConfirm(selected);
+  };
+
+  const confirmMerge = async () => {
+    if (!mergeConfirm) return;
+    setMerging(true);
+    try {
+      await ordersApi.merge(mergeConfirm.map((o) => o.id));
+      setMergeConfirm(null);
+      setSelectedIds(new Set());
+      setDetails({});
+      await fetchOrders();
+    } catch (e) {
+      setError(e instanceof Error ? e.message : String(e));
+    } finally {
+      setMerging(false);
+    }
+  };
 
   const fetchOrders = useCallback(async () => {
     setLoading(true);
@@ -64,6 +98,12 @@ export default function OrdersPage({ appConfig }: OrdersPageProps) {
         limit: 500,
       });
       setOrders(rows);
+      setSelectedIds((prev) => {
+        const validIds = new Set(rows.map((r) => r.id));
+        const next = new Set<string>();
+        prev.forEach((id) => { if (validIds.has(id)) next.add(id); });
+        return next;
+      });
     } catch (e) {
       setError(e instanceof Error ? e.message : String(e));
     } finally {
@@ -171,6 +211,11 @@ export default function OrdersPage({ appConfig }: OrdersPageProps) {
             </SelectContent>
           </Select>
         </div>
+        {selectedIds.size >= 2 && (
+          <Button onClick={openMergeConfirm} disabled={merging}>
+            Merge {selectedIds.size} orders
+          </Button>
+        )}
         <Button variant="outline" onClick={fetchOrders}>
           <RefreshCw className="h-4 w-4" />
           Refresh
@@ -198,6 +243,7 @@ export default function OrdersPage({ appConfig }: OrdersPageProps) {
             <thead className="sticky top-0 bg-card border-b border-border z-10">
               <tr className="text-muted-foreground text-xs uppercase tracking-wide text-left">
                 <th className="w-10 px-2 py-3"></th>
+                <th className="w-10 px-2 py-3"></th>
                 <th className="px-3 py-3 font-medium">Order #</th>
                 <th className="px-3 py-3 font-medium">Customer</th>
                 <th className="px-3 py-3 font-medium">Channel</th>
@@ -218,10 +264,12 @@ export default function OrdersPage({ appConfig }: OrdersPageProps) {
                   printing={printingId === o.id}
                   editingLoading={editingLoading === o.id}
                   deleting={deletingId === o.id}
+                  selected={selectedIds.has(o.id)}
                   onToggle={() => toggleExpand(o)}
                   onPrint={() => handlePrint(o)}
                   onEdit={() => handleEdit(o)}
                   onDelete={() => setDeletingTarget(o)}
+                  onSelect={() => toggleSelect(o.id)}
                 />
               ))}
             </tbody>
@@ -265,6 +313,55 @@ export default function OrdersPage({ appConfig }: OrdersPageProps) {
           </DialogContent>
         </Dialog>
       )}
+      {mergeConfirm && (
+        <Dialog open onOpenChange={(open) => !open && !merging && setMergeConfirm(null)}>
+          <DialogContent className="sm:max-w-md">
+            <DialogHeader>
+              <DialogTitle>Merge {mergeConfirm.length} orders?</DialogTitle>
+              <DialogDescription>
+                {(() => {
+                  const sorted = [...mergeConfirm].sort(
+                    (a, b) => (a.sourceRow ?? 0) - (b.sourceRow ?? 0)
+                  );
+                  const master = sorted[0];
+                  const donors = sorted.slice(1);
+                  const customers = new Set(mergeConfirm.map((o) => o.customerName));
+                  const sameCustomer = customers.size === 1;
+                  if (sameCustomer) {
+                    return (
+                      <>
+                        All items will be combined under <strong>{master.orderNumber}</strong>{' '}
+                        ({master.customerName}). They'll receive one receipt with all items and
+                        one QR code.
+                      </>
+                    );
+                  }
+                  return (
+                    <>
+                      {donors.map((d) => d.customerName).join(', ')}'s order
+                      {donors.length > 1 ? 's' : ''} will be merged into{' '}
+                      <strong>{master.customerName}</strong>'s order ({master.orderNumber}).
+                      Only <strong>{master.customerName}</strong> will receive a receipt.
+                    </>
+                  );
+                })()}
+              </DialogDescription>
+            </DialogHeader>
+            <DialogFooter>
+              <Button
+                variant="outline"
+                onClick={() => setMergeConfirm(null)}
+                disabled={merging}
+              >
+                Cancel
+              </Button>
+              <Button onClick={confirmMerge} disabled={merging}>
+                {merging ? 'Merging…' : 'Merge'}
+              </Button>
+            </DialogFooter>
+          </DialogContent>
+        </Dialog>
+      )}
     </div>
   );
 }
@@ -276,10 +373,12 @@ interface OrderRowProps {
   printing: boolean;
   editingLoading: boolean;
   deleting: boolean;
+  selected: boolean;
   onToggle: () => void;
   onPrint: () => void;
   onEdit: () => void;
   onDelete: () => void;
+  onSelect: () => void;
 }
 
 function OrderRow({
@@ -289,10 +388,12 @@ function OrderRow({
   printing,
   editingLoading,
   deleting,
+  selected,
   onToggle,
   onPrint,
   onEdit,
   onDelete,
+  onSelect,
 }: OrderRowProps) {
   const stopAndPrint = (e: React.MouseEvent) => {
     e.stopPropagation();
@@ -314,6 +415,18 @@ function OrderRow({
           isExpanded && !removed && 'bg-accent/30',
         )}
       >
+        <td
+          className="w-10 px-2 py-3"
+          onClick={(e) => e.stopPropagation()}
+        >
+          {!removed && (
+            <Checkbox
+              checked={selected}
+              onCheckedChange={() => onSelect()}
+              aria-label={`Select order ${row.orderNumber}`}
+            />
+          )}
+        </td>
         <td className="w-10 px-2 py-3 text-muted-foreground">
           {!removed &&
             (isExpanded ? (
@@ -329,6 +442,16 @@ function OrderRow({
               <Badge variant="warning" className="gap-1 font-normal" title="Locked from sync">
                 <Lock className="h-3 w-3" />
                 locked
+              </Badge>
+            )}
+            {row.mergedFromCount > 0 && (
+              <Badge variant="muted" className="gap-1 font-normal" title="This order has merged-in rows">
+                merged ×{row.mergedFromCount + 1}
+              </Badge>
+            )}
+            {row.mergedIntoId && (
+              <Badge variant="muted" className="font-normal" title="Merged into another order">
+                merged into
               </Badge>
             )}
           </div>
@@ -396,7 +519,7 @@ function OrderRow({
       {isExpanded && !removed && (
         <tr className="bg-accent/20">
           <td></td>
-          <td colSpan={8} className="px-3 py-4">
+          <td colSpan={9} className="px-3 py-4">
             {detail ? (
               <DetailPanel detail={detail} />
             ) : (
