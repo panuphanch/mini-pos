@@ -3,7 +3,7 @@ use crate::db::{customers, orders, products};
 use crate::printer::network;
 use crate::printer::receipt::{build_receipt, PrinterConfig, ReceiptData, ReceiptItem};
 use crate::state::AppState;
-use serde::Serialize;
+use serde::{Deserialize, Serialize};
 use tauri::State;
 
 #[derive(Debug, Serialize)]
@@ -23,6 +23,7 @@ pub struct OrderListRow {
     pub order_date: String,
     pub notes: Option<String>,
     pub items_summary: String,
+    pub sync_locked: bool,
 }
 
 #[derive(Debug, Serialize)]
@@ -53,7 +54,24 @@ pub struct OrderDetail {
     pub printed_at: Option<String>,
     pub print_count: i64,
     pub deleted_at: Option<String>,
+    pub sync_locked: bool,
     pub items: Vec<OrderDetailItem>,
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct OrderEditItem {
+    pub product_id: String,
+    pub quantity: i64,
+    pub unit_price: i64,
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct OrderEditPayload {
+    pub items: Vec<OrderEditItem>,
+    pub discount: i64,
+    pub delivery_fee: i64,
 }
 
 #[tauri::command]
@@ -88,6 +106,7 @@ pub async fn list_orders(
             printed_at: r.printed_at, print_count: r.print_count,
             deleted_at: r.deleted_at, order_date: r.order_date,
             notes: r.notes, items_summary,
+            sync_locked: r.sync_locked != 0,
         });
     }
     Ok(out)
@@ -120,8 +139,24 @@ pub async fn get_order(
         discount: r.discount, delivery_fee: r.delivery_fee,
         order_date: r.order_date, source_tab: r.source_tab, source_row: r.source_row,
         printed_at: r.printed_at, print_count: r.print_count,
-        deleted_at: r.deleted_at, items: detail_items,
+        deleted_at: r.deleted_at, sync_locked: r.sync_locked != 0,
+        items: detail_items,
     }))
+}
+
+#[tauri::command]
+pub async fn update_order(
+    state: State<'_, AppState>,
+    id: String,
+    payload: OrderEditPayload,
+) -> Result<(), String> {
+    let items: Vec<orders::EditOrderItem> = payload.items.into_iter().map(|it| {
+        orders::EditOrderItem {
+            product_id: it.product_id, quantity: it.quantity, unit_price: it.unit_price,
+        }
+    }).collect();
+    orders::apply_order_edit(&state.db, &id, &items, payload.discount, payload.delivery_fee)
+        .await.map_err(|e| e.to_string())
 }
 
 #[tauri::command]

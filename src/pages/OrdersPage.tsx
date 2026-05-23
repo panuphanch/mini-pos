@@ -3,7 +3,9 @@ import {
   AlertCircle,
   ChevronDown,
   ChevronRight,
+  Lock,
   MapPin,
+  PencilLine,
   Printer,
   RefreshCw,
 } from 'lucide-react';
@@ -13,6 +15,7 @@ import { Button } from '../components/ui/button';
 import { Checkbox } from '../components/ui/checkbox';
 import { Label } from '../components/ui/label';
 import { Badge } from '../components/ui/badge';
+import EditOrderDialog from '../components/EditOrderDialog';
 import {
   Select,
   SelectContent,
@@ -37,6 +40,8 @@ export default function OrdersPage({ appConfig }: OrdersPageProps) {
   const [error, setError] = useState('');
   const [expandedId, setExpandedId] = useState<string | null>(null);
   const [details, setDetails] = useState<Record<string, OrderDetail>>({});
+  const [editing, setEditing] = useState<OrderDetail | null>(null);
+  const [editingLoading, setEditingLoading] = useState<string | null>(null);
 
   const fetchOrders = useCallback(async () => {
     setLoading(true);
@@ -75,6 +80,24 @@ export default function OrdersPage({ appConfig }: OrdersPageProps) {
     }
   };
 
+  const handleEdit = async (row: OrderListRow) => {
+    if (row.deletedAt) return;
+    setEditingLoading(row.id);
+    try {
+      const fresh = await ordersApi.get(row.id);
+      if (fresh) setEditing(fresh);
+    } catch (e) {
+      setError(e instanceof Error ? e.message : String(e));
+    } finally {
+      setEditingLoading(null);
+    }
+  };
+
+  const afterEditSaved = async () => {
+    setDetails({});
+    await fetchOrders();
+  };
+
   const handlePrint = async (row: OrderListRow) => {
     if (!appConfig) return;
     setPrintingId(row.id);
@@ -99,8 +122,15 @@ export default function OrdersPage({ appConfig }: OrdersPageProps) {
 
   return (
     <div className="h-full flex flex-col bg-background">
-      <header className="flex flex-wrap items-end gap-3 px-5 py-4 border-b border-border">
+      <header className="flex flex-wrap items-center gap-3 px-5 py-4 border-b border-border">
         <h1 className="text-2xl font-bold tracking-tight flex-1 min-w-0">Orders</h1>
+        <Label className="inline-flex h-11 items-center gap-2 cursor-pointer select-none px-1">
+          <Checkbox
+            checked={showRemoved}
+            onCheckedChange={(v) => setShowRemoved(v === true)}
+          />
+          <span>Show removed</span>
+        </Label>
         <div className="w-44">
           <Select value={filterTab} onValueChange={setFilterTab}>
             <SelectTrigger aria-label="Filter by week">
@@ -116,13 +146,6 @@ export default function OrdersPage({ appConfig }: OrdersPageProps) {
             </SelectContent>
           </Select>
         </div>
-        <Label className="flex items-center gap-2 cursor-pointer select-none">
-          <Checkbox
-            checked={showRemoved}
-            onCheckedChange={(v) => setShowRemoved(v === true)}
-          />
-          <span>Show removed</span>
-        </Label>
         <Button variant="outline" onClick={fetchOrders}>
           <RefreshCw className="h-4 w-4" />
           Refresh
@@ -156,7 +179,8 @@ export default function OrdersPage({ appConfig }: OrdersPageProps) {
                 <th className="px-3 py-3 font-medium">Items / Delivery</th>
                 <th className="px-3 py-3 font-medium text-right">Total</th>
                 <th className="px-3 py-3 font-medium">Note</th>
-                <th className="px-3 py-3 font-medium text-right"></th>
+                <th className="w-12 px-2 py-3 font-medium"></th>
+                <th className="w-32 px-3 py-3 font-medium text-right"></th>
               </tr>
             </thead>
             <tbody>
@@ -167,13 +191,22 @@ export default function OrdersPage({ appConfig }: OrdersPageProps) {
                   isExpanded={expandedId === o.id}
                   detail={details[o.id]}
                   printing={printingId === o.id}
+                  editingLoading={editingLoading === o.id}
                   onToggle={() => toggleExpand(o)}
                   onPrint={() => handlePrint(o)}
+                  onEdit={() => handleEdit(o)}
                 />
               ))}
             </tbody>
           </table>
         </div>
+      )}
+      {editing && (
+        <EditOrderDialog
+          detail={editing}
+          onClose={() => setEditing(null)}
+          onSaved={afterEditSaved}
+        />
       )}
     </div>
   );
@@ -184,14 +217,29 @@ interface OrderRowProps {
   isExpanded: boolean;
   detail: OrderDetail | undefined;
   printing: boolean;
+  editingLoading: boolean;
   onToggle: () => void;
   onPrint: () => void;
+  onEdit: () => void;
 }
 
-function OrderRow({ row, isExpanded, detail, printing, onToggle, onPrint }: OrderRowProps) {
+function OrderRow({
+  row,
+  isExpanded,
+  detail,
+  printing,
+  editingLoading,
+  onToggle,
+  onPrint,
+  onEdit,
+}: OrderRowProps) {
   const stopAndPrint = (e: React.MouseEvent) => {
     e.stopPropagation();
     onPrint();
+  };
+  const stopAndEdit = (e: React.MouseEvent) => {
+    e.stopPropagation();
+    onEdit();
   };
   const removed = !!row.deletedAt;
 
@@ -213,7 +261,17 @@ function OrderRow({ row, isExpanded, detail, printing, onToggle, onPrint }: Orde
               <ChevronRight className="h-4 w-4" />
             ))}
         </td>
-        <td className="px-3 py-3 font-mono text-sm">{row.orderNumber}</td>
+        <td className="px-3 py-3 font-mono text-sm">
+          <div className="flex items-center gap-2">
+            <span>{row.orderNumber}</span>
+            {row.syncLocked && (
+              <Badge variant="warning" className="gap-1 font-normal" title="Locked from sync">
+                <Lock className="h-3 w-3" />
+                locked
+              </Badge>
+            )}
+          </div>
+        </td>
         <td className="px-3 py-3 text-sm font-medium">{row.customerName}</td>
         <td className="px-3 py-3 text-sm text-muted-foreground">{row.channel ?? ''}</td>
         <td className="px-3 py-3 text-sm">
@@ -229,7 +287,20 @@ function OrderRow({ row, isExpanded, detail, printing, onToggle, onPrint }: Orde
           ฿{row.totalAmount}
         </td>
         <td className="px-3 py-3 text-sm text-muted-foreground">{row.notes ?? ''}</td>
-        <td className="px-3 py-3 text-right">
+        <td className="w-12 px-2 py-3 text-center">
+          {!removed && (
+            <Button
+              variant="ghost"
+              size="iconSm"
+              aria-label="Edit order"
+              onClick={stopAndEdit}
+              disabled={editingLoading}
+            >
+              <PencilLine className="h-4 w-4" />
+            </Button>
+          )}
+        </td>
+        <td className="w-32 px-3 py-3 text-right">
           {removed ? (
             <Badge variant="muted">removed</Badge>
           ) : (
@@ -238,6 +309,7 @@ function OrderRow({ row, isExpanded, detail, printing, onToggle, onPrint }: Orde
               size="sm"
               onClick={stopAndPrint}
               disabled={printing}
+              className="min-w-[7rem] justify-center"
             >
               <Printer className="h-4 w-4" />
               {printing
@@ -252,7 +324,7 @@ function OrderRow({ row, isExpanded, detail, printing, onToggle, onPrint }: Orde
       {isExpanded && !removed && (
         <tr className="bg-accent/20">
           <td></td>
-          <td colSpan={7} className="px-3 py-4">
+          <td colSpan={8} className="px-3 py-4">
             {detail ? (
               <DetailPanel detail={detail} />
             ) : (
