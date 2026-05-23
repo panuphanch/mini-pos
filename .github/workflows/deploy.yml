@@ -1,84 +1,92 @@
-name: Build and Package
+name: Build and Release
 
 on:
+  push:
+    branches: [master]
   workflow_dispatch:
+
+permissions:
+  contents: write
 
 jobs:
   build:
-
-    runs-on: ${{ matrix.os }}
+    name: Build ${{ matrix.os }}
     strategy:
+      fail-fast: false
       matrix:
-        os: [windows-latest, macos-latest]
-        python-version: [3.8]
-
+        include:
+          # NSIS bundler on Windows crashes inside the IsShortcutTarget macro
+          # in Tauri's bundled installer.nsi (Tauri issue, not ours), so we
+          # only build the MSI installer until it's resolved upstream.
+          - os: windows-latest
+            bundles: msi
+            bundle_paths: |
+              src-tauri/target/release/bundle/msi/*
+          - os: macos-latest
+            bundles: dmg
+            bundle_paths: |
+              src-tauri/target/release/bundle/dmg/*
+    runs-on: ${{ matrix.os }}
     steps:
-    - uses: actions/checkout@v2
-    - name: Set up Python ${{ matrix.python-version }}
-      uses: actions/setup-python@v2
-      with:
-        python-version: ${{ matrix.python-version }}
-    - name: Install dependencies
-      run: |
-        python -m pip install --upgrade pip
-        pip install -r requirement.txt
-    - name: Build Application
-      run: |
-        python -m eel mini-pos.py web --add-data "_internal:_internal" --add-data "static:static" --onefile
-      shell: bash
-    - name: Upload Artifact
-      uses: actions/upload-artifact@v2
-      with:
-        name: mini-pos-${{ runner.os }}
-        path: dist/mini-pos*
-  
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+          cache: 'npm'
+
+      - uses: dtolnay/rust-toolchain@stable
+
+      - uses: swatinem/rust-cache@v2
+        with:
+          workspaces: src-tauri -> target
+
+      - name: Install npm dependencies
+        # npm install (not npm ci) so the lockfile can be reconciled at install
+        # time. vite ^5 + vitest ^4 produce a split dep tree (vitest carries a
+        # nested vite ^7) and different npm versions resolve it differently;
+        # ci insists on a perfectly synced lockfile, install does not. Tighten
+        # back to `npm ci` once vite/vitest versions are aligned.
+        run: npm install --no-audit --no-fund
+
+      - name: Build Tauri app
+        run: npm run tauri build -- --bundles ${{ matrix.bundles }}
+
+      - name: Upload bundle
+        uses: actions/upload-artifact@v4
+        with:
+          name: mini-pos-${{ runner.os }}
+          path: ${{ matrix.bundle_paths }}
+          if-no-files-found: error
+
   release:
+    if: github.event_name == 'push' && github.ref == 'refs/heads/master'
     needs: build
     runs-on: ubuntu-latest
     steps:
-    - name: Checkout code
-      uses: actions/checkout@v2
-    - name: Download Artifacts
-      uses: actions/download-artifact@v2
-      with:
-        name: mini-pos-Windows
-        path: dist/
-    - uses: actions/download-artifact@v2
-      with:
-        name: mini-pos-macOS
-        path: dist/
-    
-    - name: Bump version and push tag
-      id: tag_version
-      uses: mathieudutour/github-tag-action@v5.6
-      with:
-        github_token: ${{ secrets.GITHUB_TOKEN }}
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
 
-    - name: Create Release
-      id: create_release
-      uses: actions/create-release@v1
-      env:
-        GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-      with:
-        tag_name: ${{ steps.tag_version.outputs.new_tag }}
-        release_name: Release ${{ steps.tag_version.outputs.new_tag }}
-        draft: false
-        prerelease: false
+      - uses: actions/download-artifact@v4
+        with:
+          pattern: mini-pos-*
+          path: dist
+          merge-multiple: true
 
-    - name: Upload Release Asset
-      uses: actions/upload-release-asset@v1
-      env:
-        GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-      with:
-        upload_url: ${{ steps.create_release.outputs.upload_url }}
-        asset_path: ./dist/mini-pos
-        asset_name: mini-pos-osx
-        asset_content_type: application/octet-stream
-    - uses: actions/upload-release-asset@v1
-      env:
-        GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-      with:
-        upload_url: ${{ steps.create_release.outputs.upload_url }}
-        asset_path: ./dist/mini-pos.exe
-        asset_name: mini-pos-win.exe
-        asset_content_type: application/octet-stream
+      - name: Bump version and push tag
+        id: tag
+        uses: mathieudutour/github-tag-action@v6.2
+        with:
+          github_token: ${{ secrets.GITHUB_TOKEN }}
+          default_bump: patch
+          release_branches: master
+
+      - name: Create GitHub Release
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: ${{ steps.tag.outputs.new_tag }}
+          name: Release ${{ steps.tag.outputs.new_tag }}
+          body: ${{ steps.tag.outputs.changelog }}
+          files: dist/*
+          fail_on_unmatched_files: true
