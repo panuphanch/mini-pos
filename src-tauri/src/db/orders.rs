@@ -23,6 +23,7 @@ pub struct OrderRow {
     pub print_count: i64,
     pub deleted_at: Option<String>,
     pub sync_locked: i64,
+    pub merged_into_id: Option<String>,
     pub created_at: String,
     pub updated_at: String,
 }
@@ -41,6 +42,7 @@ pub struct OrderItemRow {
     pub product_id: String,
     pub quantity: i64,
     pub unit_price: i64,
+    pub source_row: Option<i64>,
 }
 
 pub struct UpsertOrderInput<'a> {
@@ -638,5 +640,40 @@ mod tests {
         let err = delete_order(&pool, &out.order_id).await.unwrap_err();
         assert!(matches!(err, sqlx::Error::Protocol(_)),
             "expected Protocol error, got {:?}", err);
+    }
+
+    #[tokio::test]
+    async fn migration_0003_adds_columns_and_backfill_query_runs() {
+        let pool = init_memory_pool().await.unwrap();
+        let (p, c) = seed_pc(&pool).await;
+        let mut tx = pool.begin().await.unwrap();
+        upsert_from_source(&mut tx, UpsertOrderInput {
+            customer_id: &c.id, channel: None, delivery_location: None, notes: None,
+            total_amount: 85, order_date: "2026-05-11",
+            source_tab: "Order_30", source_row: 11,
+            items: vec![UpsertOrderItemInput { product_id: &p.id, quantity: 1, unit_price: 85 }],
+        }).await.unwrap();
+        tx.commit().await.unwrap();
+
+        // The migration's backfill is retroactive — items inserted by code that
+        // doesn't yet set source_row will read NULL here. Run the same backfill
+        // query that the migration runs to prove the SQL is shaped right.
+        sqlx::query(
+            r#"UPDATE order_item
+                 SET source_row = (
+                   SELECT source_row FROM "order" WHERE "order".id = order_item.order_id
+                 )
+               WHERE source_row IS NULL"#,
+        ).execute(&pool).await.unwrap();
+
+        let row: (Option<i64>,) = sqlx::query_as(
+            r#"SELECT source_row FROM order_item LIMIT 1"#,
+        ).fetch_one(&pool).await.unwrap();
+        assert_eq!(row.0, Some(11), "backfill should populate source_row from parent order");
+
+        // Confirm the merged_into_id column exists on "order".
+        let _: (Option<String>,) = sqlx::query_as(
+            r#"SELECT merged_into_id FROM "order" LIMIT 1"#,
+        ).fetch_one(&pool).await.unwrap();
     }
 }
