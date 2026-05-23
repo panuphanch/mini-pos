@@ -2,9 +2,8 @@ use crate::printer::promptpay::{self, AccountType};
 use crate::printer::thai::{self, Alignment};
 use serde::{Deserialize, Serialize};
 
-/// Shop logo, embedded at compile time. Sourced from web/images/logo.png so the
-/// new Tauri receipt prints the same logo the legacy Python version did.
-const LOGO_PNG: &[u8] = include_bytes!("../../../web/images/logo.png");
+/// Shop logo, embedded at compile time.
+const LOGO_PNG: &[u8] = include_bytes!("../../assets/logo.png");
 
 /// ESC E 1 — enable bold.
 const ESC_BOLD_ON: [u8; 3] = [0x1B, 0x45, 0x01];
