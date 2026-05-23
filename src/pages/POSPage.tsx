@@ -6,7 +6,9 @@ import ProductGrid from '../components/ProductGrid';
 import Cart from '../components/Cart';
 import PaymentDialog from '../components/PaymentDialog';
 
-interface POSPageProps { appConfig: AppConfig | null; }
+interface POSPageProps {
+  appConfig: AppConfig | null;
+}
 
 export default function POSPage({ appConfig }: POSPageProps) {
   const [products, setProducts] = useState<ProductLite[]>([]);
@@ -26,10 +28,10 @@ export default function POSPage({ appConfig }: POSPageProps) {
 
   return (
     <div className="flex h-full">
-      <div className="w-[60%] h-full bg-gray-900">
+      <div className="w-[60%] h-full">
         <ProductGrid products={products} onAddToCart={addItem} loading={loading} />
       </div>
-      <div className="w-[40%] h-full border-l border-gray-700">
+      <div className="w-[40%] h-full border-l border-border">
         <Cart onCharge={() => setShowPayment(true)} />
       </div>
       {showPayment && (

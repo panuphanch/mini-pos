@@ -1,3 +1,121 @@
+@import url('https://fonts.googleapis.com/css2?family=IBM+Plex+Sans+Thai+Looped:wght@300;400;500;600;700&family=Inter:wght@400;500;600;700&display=swap');
+
 @tailwind base;
 @tailwind components;
 @tailwind utilities;
+
+@layer base {
+  :root {
+    /* Warm cream / charcoal light theme */
+    --background: 36 38% 97%;          /* warm cream */
+    --foreground: 25 18% 14%;          /* soft charcoal */
+
+    --card: 36 38% 99%;
+    --card-foreground: 25 18% 14%;
+
+    --popover: 36 38% 99%;
+    --popover-foreground: 25 18% 14%;
+
+    --primary: 28 90% 48%;             /* amber 600 */
+    --primary-foreground: 36 38% 99%;
+
+    --secondary: 30 25% 92%;
+    --secondary-foreground: 25 18% 14%;
+
+    --muted: 30 20% 91%;
+    --muted-foreground: 25 10% 40%;
+
+    --accent: 28 85% 92%;               /* amber tint */
+    --accent-foreground: 25 50% 22%;
+
+    --destructive: 0 72% 51%;
+    --destructive-foreground: 36 38% 99%;
+
+    --success: 142 55% 38%;
+    --success-foreground: 36 38% 99%;
+
+    --warning: 38 92% 50%;
+    --warning-foreground: 25 50% 14%;
+
+    --border: 30 15% 84%;
+    --input: 30 15% 84%;
+    --ring: 28 90% 48%;
+
+    --radius: 0.625rem;
+  }
+
+  .dark {
+    --background: 25 12% 9%;            /* deep charcoal */
+    --foreground: 36 30% 95%;
+
+    --card: 25 12% 12%;
+    --card-foreground: 36 30% 95%;
+
+    --popover: 25 12% 12%;
+    --popover-foreground: 36 30% 95%;
+
+    --primary: 32 95% 56%;              /* amber 500 for dark */
+    --primary-foreground: 25 25% 10%;
+
+    --secondary: 25 10% 18%;
+    --secondary-foreground: 36 30% 95%;
+
+    --muted: 25 8% 17%;
+    --muted-foreground: 30 10% 65%;
+
+    --accent: 28 40% 22%;
+    --accent-foreground: 36 30% 95%;
+
+    --destructive: 0 65% 50%;
+    --destructive-foreground: 36 30% 95%;
+
+    --success: 142 50% 45%;
+    --success-foreground: 36 30% 95%;
+
+    --warning: 38 92% 55%;
+    --warning-foreground: 25 25% 10%;
+
+    --border: 25 10% 22%;
+    --input: 25 10% 22%;
+    --ring: 32 95% 56%;
+  }
+
+  * {
+    @apply border-border;
+  }
+
+  html,
+  body,
+  #root {
+    @apply h-full;
+  }
+
+  body {
+    @apply bg-background text-foreground font-sans antialiased;
+    font-feature-settings: 'cv11', 'ss01';
+    -webkit-font-smoothing: antialiased;
+    text-rendering: optimizeLegibility;
+  }
+
+  /* Ensure form controls inherit the font */
+  button,
+  input,
+  select,
+  textarea {
+    font-family: inherit;
+  }
+}
+
+@layer utilities {
+  .scrollbar-thin::-webkit-scrollbar {
+    width: 8px;
+    height: 8px;
+  }
+  .scrollbar-thin::-webkit-scrollbar-thumb {
+    background: hsl(var(--muted-foreground) / 0.35);
+    border-radius: 4px;
+  }
+  .scrollbar-thin::-webkit-scrollbar-track {
+    background: transparent;
+  }
+}

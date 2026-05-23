@@ -1,4 +1,7 @@
 import { useEffect, useRef, useState } from 'react';
+import { Plus } from 'lucide-react';
+import { Button } from './ui/button';
+import { Input } from './ui/input';
 
 export interface SearchResult {
   id: string;
@@ -21,7 +24,7 @@ export default function SearchPicker({
   onPick,
   onCreate,
   selected,
-  createLabel = '+ Create new',
+  createLabel = 'Create new',
 }: SearchPickerProps) {
   const [q, setQ] = useState('');
   const [open, setOpen] = useState(false);
@@ -42,7 +45,10 @@ export default function SearchPicker({
   useEffect(() => {
     if (!open) return;
     const id = setTimeout(async () => {
-      if (q.trim().length === 0) { setResults([]); return; }
+      if (q.trim().length === 0) {
+        setResults([]);
+        return;
+      }
       setLoading(true);
       try {
         setResults(await search(q.trim()));
@@ -56,39 +62,44 @@ export default function SearchPicker({
   return (
     <div ref={containerRef} className="relative flex items-center gap-2">
       <div className="relative flex-1">
-        <input
+        <Input
           type="text"
           value={selected ? selected.primary : q}
-          onChange={(e) => { setQ(e.target.value); setOpen(true); }}
+          onChange={(e) => {
+            setQ(e.target.value);
+            setOpen(true);
+          }}
           onFocus={() => setOpen(true)}
           placeholder={placeholder}
-          className="w-full px-3 py-2 bg-gray-800 border border-gray-700 rounded-lg text-white text-sm focus:outline-none focus:border-blue-500"
         />
         {open && (
-          <div className="absolute top-full left-0 right-0 mt-1 bg-gray-800 border border-gray-700 rounded-lg shadow-lg max-h-64 overflow-y-auto z-10">
-            {loading && <div className="px-3 py-2 text-sm text-gray-400">Searching…</div>}
+          <div className="absolute top-full left-0 right-0 mt-1 bg-popover text-popover-foreground border border-border rounded-md shadow-lg max-h-64 overflow-y-auto z-20 scrollbar-thin">
+            {loading && <div className="px-3 py-2.5 text-sm text-muted-foreground">Searching…</div>}
             {!loading && results.length === 0 && q.trim().length > 0 && (
-              <div className="px-3 py-2 text-sm text-gray-400">No matches</div>
+              <div className="px-3 py-2.5 text-sm text-muted-foreground">No matches</div>
             )}
             {results.map((r) => (
               <button
                 key={r.id}
-                onClick={() => { onPick(r); setOpen(false); setQ(''); }}
-                className="block w-full text-left px-3 py-2 text-sm text-white hover:bg-gray-700"
+                type="button"
+                onClick={() => {
+                  onPick(r);
+                  setOpen(false);
+                  setQ('');
+                }}
+                className="block w-full text-left px-3 py-2 text-sm hover:bg-accent hover:text-accent-foreground border-b border-border last:border-0"
               >
                 <div>{r.primary}</div>
-                {r.secondary && <div className="text-xs text-gray-400">{r.secondary}</div>}
+                {r.secondary && <div className="text-xs text-muted-foreground">{r.secondary}</div>}
               </button>
             ))}
           </div>
         )}
       </div>
-      <button
-        onClick={onCreate}
-        className="px-3 py-2 bg-blue-700 hover:bg-blue-600 text-white text-sm rounded-lg whitespace-nowrap"
-      >
+      <Button variant="outline" onClick={onCreate}>
+        <Plus className="h-4 w-4" />
         {createLabel}
-      </button>
+      </Button>
     </div>
   );
 }
