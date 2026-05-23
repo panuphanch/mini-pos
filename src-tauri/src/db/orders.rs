@@ -180,12 +180,14 @@ pub async fn soft_delete_missing_rows(
     // silently match nothing in SQLite, so drop that predicate entirely.
     let sql = if keep_rows.is_empty() {
         r#"UPDATE "order" SET deleted_at = ?, updated_at = ?
-           WHERE source_tab = ? AND deleted_at IS NULL AND sync_locked = 0"#.to_string()
+           WHERE source_tab = ? AND deleted_at IS NULL AND sync_locked = 0
+             AND merged_into_id IS NULL"#.to_string()
     } else {
         let placeholders = keep_rows.iter().map(|_| "?").collect::<Vec<_>>().join(",");
         format!(
             r#"UPDATE "order" SET deleted_at = ?, updated_at = ?
                WHERE source_tab = ? AND deleted_at IS NULL AND sync_locked = 0
+                 AND merged_into_id IS NULL
                  AND source_row NOT IN ({})"#,
             placeholders
         )
@@ -204,6 +206,8 @@ pub async fn list_by_tab(
 ) -> Result<Vec<OrderRow>, sqlx::Error> {
     let mut sql = String::from(r#"SELECT * FROM "order" WHERE 1=1"#);
     if !include_deleted { sql.push_str(" AND deleted_at IS NULL"); }
+    // Merged-away rows are soft-deleted donors; show them only with include_deleted.
+    if !include_deleted { sql.push_str(" AND merged_into_id IS NULL"); }
     if tab.is_some() { sql.push_str(" AND source_tab = ?"); }
     sql.push_str(" ORDER BY source_tab DESC, source_row DESC LIMIT ?");
     let mut q = sqlx::query_as::<_, OrderRow>(&sql);
@@ -1015,5 +1019,62 @@ mod tests {
             .await.unwrap_err();
         assert!(matches!(err, sqlx::Error::Protocol(_)),
             "expected Protocol error, got {:?}", err);
+    }
+
+    #[tokio::test]
+    async fn list_hides_merged_away_rows_by_default() {
+        let pool = init_memory_pool().await.unwrap();
+        let (p, c) = seed_pc(&pool).await;
+        let mut tx = pool.begin().await.unwrap();
+        let a = upsert_from_source(&mut tx, UpsertOrderInput {
+            customer_id: &c.id, channel: None, delivery_location: None, notes: None,
+            total_amount: 85, order_date: "2026-05-11",
+            source_tab: "Order_30", source_row: 4,
+            items: vec![UpsertOrderItemInput { product_id: &p.id, quantity: 1, unit_price: 85 }],
+        }).await.unwrap();
+        let b = upsert_from_source(&mut tx, UpsertOrderInput {
+            customer_id: &c.id, channel: None, delivery_location: None, notes: None,
+            total_amount: 85, order_date: "2026-05-11",
+            source_tab: "Order_30", source_row: 5,
+            items: vec![UpsertOrderItemInput { product_id: &p.id, quantity: 1, unit_price: 85 }],
+        }).await.unwrap();
+        tx.commit().await.unwrap();
+        merge_orders(&pool, &[a.order_id.clone(), b.order_id.clone()]).await.unwrap();
+
+        let alive = list_by_tab(&pool, Some("Order_30"), false, 100).await.unwrap();
+        assert_eq!(alive.len(), 1);
+        assert_eq!(alive[0].id, a.order_id);
+
+        let all = list_by_tab(&pool, Some("Order_30"), true, 100).await.unwrap();
+        assert_eq!(all.len(), 2);
+    }
+
+    #[tokio::test]
+    async fn soft_delete_missing_rows_skips_merged_away() {
+        let pool = init_memory_pool().await.unwrap();
+        let (p, c) = seed_pc(&pool).await;
+        let mut tx = pool.begin().await.unwrap();
+        let a = upsert_from_source(&mut tx, UpsertOrderInput {
+            customer_id: &c.id, channel: None, delivery_location: None, notes: None,
+            total_amount: 85, order_date: "2026-05-11",
+            source_tab: "Order_30", source_row: 4,
+            items: vec![UpsertOrderItemInput { product_id: &p.id, quantity: 1, unit_price: 85 }],
+        }).await.unwrap();
+        let b = upsert_from_source(&mut tx, UpsertOrderInput {
+            customer_id: &c.id, channel: None, delivery_location: None, notes: None,
+            total_amount: 85, order_date: "2026-05-11",
+            source_tab: "Order_30", source_row: 5,
+            items: vec![UpsertOrderItemInput { product_id: &p.id, quantity: 1, unit_price: 85 }],
+        }).await.unwrap();
+        tx.commit().await.unwrap();
+        merge_orders(&pool, &[a.order_id.clone(), b.order_id.clone()]).await.unwrap();
+
+        // Sheet sync says "only row 4 still exists". soft_delete_missing_rows must
+        // ignore row 5's order shell because it's already merged-away — touching
+        // it would re-stamp deleted_at unnecessarily.
+        let mut tx = pool.begin().await.unwrap();
+        let n = soft_delete_missing_rows(&mut tx, "Order_30", &[4]).await.unwrap();
+        tx.commit().await.unwrap();
+        assert_eq!(n, 0);
     }
 }
