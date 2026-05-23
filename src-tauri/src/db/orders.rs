@@ -197,7 +197,7 @@ pub async fn list_by_tab(
     let mut sql = String::from(r#"SELECT * FROM "order" WHERE 1=1"#);
     if !include_deleted { sql.push_str(" AND deleted_at IS NULL"); }
     if tab.is_some() { sql.push_str(" AND source_tab = ?"); }
-    sql.push_str(" ORDER BY source_tab DESC, source_row ASC LIMIT ?");
+    sql.push_str(" ORDER BY source_tab DESC, source_row DESC LIMIT ?");
     let mut q = sqlx::query_as::<_, OrderRow>(&sql);
     if let Some(t) = tab { q = q.bind(t); }
     q = q.bind(limit);
@@ -288,6 +288,38 @@ pub async fn upsert_week_mapping(
            ON CONFLICT(tab_name) DO UPDATE SET week_start_date = excluded.week_start_date"#,
     )
     .bind(tab).bind(week_start).execute(pool).await?;
+    Ok(())
+}
+
+/// Soft-delete an order and lock it against re-sync.
+///
+/// Returns an error if the order doesn't exist or is already soft-deleted.
+/// The lock is what stops the next `apply_sync` from inserting the row again.
+/// A future task adds an additional guard against deleting a row that's been
+/// merged into another order.
+pub async fn delete_order(pool: &SqlitePool, order_id: &str) -> Result<(), sqlx::Error> {
+    let mut tx = pool.begin().await?;
+
+    let row: Option<(Option<String>,)> = sqlx::query_as(
+        r#"SELECT deleted_at FROM "order" WHERE id = ?"#,
+    )
+    .bind(order_id).fetch_optional(&mut *tx).await?;
+    let Some((deleted_at,)) = row else {
+        return Err(sqlx::Error::RowNotFound);
+    };
+    if deleted_at.is_some() {
+        return Err(sqlx::Error::Protocol(
+            format!("order {} is already deleted", order_id).into()
+        ));
+    }
+    let now = now_iso();
+    sqlx::query(
+        r#"UPDATE "order" SET deleted_at = ?, sync_locked = 1, updated_at = ?
+           WHERE id = ?"#,
+    )
+    .bind(&now).bind(&now).bind(order_id)
+    .execute(&mut *tx).await?;
+    tx.commit().await?;
     Ok(())
 }
 
@@ -546,5 +578,65 @@ mod tests {
             "order_numbers should all be unique, got: {:?}", nums);
         assert_eq!(nums[0], "16-17/05/26-1");
         assert_eq!(nums[9], "16-17/05/26-10");
+    }
+
+    #[tokio::test]
+    async fn delete_order_soft_deletes_and_locks_against_resync() {
+        let pool = init_memory_pool().await.unwrap();
+        let (p, c) = seed_pc(&pool).await;
+
+        // Insert via the normal sync path so the row mirrors a real sheet row.
+        let mut tx = pool.begin().await.unwrap();
+        let out = upsert_from_source(&mut tx, UpsertOrderInput {
+            customer_id: &c.id, channel: None,
+            delivery_location: None, notes: None,
+            total_amount: 85, order_date: "2026-05-11",
+            source_tab: "Order_30", source_row: 11,
+            items: vec![UpsertOrderItemInput { product_id: &p.id, quantity: 1, unit_price: 85 }],
+        }).await.unwrap();
+        tx.commit().await.unwrap();
+
+        delete_order(&pool, &out.order_id).await.unwrap();
+
+        // Hidden by default
+        let alive = list_by_tab(&pool, Some("Order_30"), false, 100).await.unwrap();
+        assert_eq!(alive.len(), 0);
+        // Visible under include_deleted
+        let all = list_by_tab(&pool, Some("Order_30"), true, 100).await.unwrap();
+        assert_eq!(all.len(), 1);
+        assert!(all[0].deleted_at.is_some());
+        assert_eq!(all[0].sync_locked, 1);
+
+        // Re-syncing the same row must NOT resurrect it (sync_locked guards both
+        // upsert_from_source and soft_delete_missing_rows).
+        let mut tx = pool.begin().await.unwrap();
+        upsert_from_source(&mut tx, UpsertOrderInput {
+            customer_id: &c.id, channel: None,
+            delivery_location: None, notes: None,
+            total_amount: 85, order_date: "2026-05-11",
+            source_tab: "Order_30", source_row: 11,
+            items: vec![UpsertOrderItemInput { product_id: &p.id, quantity: 1, unit_price: 85 }],
+        }).await.unwrap();
+        tx.commit().await.unwrap();
+        let alive = list_by_tab(&pool, Some("Order_30"), false, 100).await.unwrap();
+        assert_eq!(alive.len(), 0, "deleted+locked row must stay hidden after re-sync");
+    }
+
+    #[tokio::test]
+    async fn delete_order_rejects_already_deleted() {
+        let pool = init_memory_pool().await.unwrap();
+        let (p, c) = seed_pc(&pool).await;
+        let mut tx = pool.begin().await.unwrap();
+        let out = upsert_from_source(&mut tx, UpsertOrderInput {
+            customer_id: &c.id, channel: None, delivery_location: None, notes: None,
+            total_amount: 85, order_date: "2026-05-11",
+            source_tab: "Order_30", source_row: 11,
+            items: vec![UpsertOrderItemInput { product_id: &p.id, quantity: 1, unit_price: 85 }],
+        }).await.unwrap();
+        tx.commit().await.unwrap();
+        delete_order(&pool, &out.order_id).await.unwrap();
+        let err = delete_order(&pool, &out.order_id).await.unwrap_err();
+        assert!(matches!(err, sqlx::Error::Protocol(_)),
+            "expected Protocol error, got {:?}", err);
     }
 }

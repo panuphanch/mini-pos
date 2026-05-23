@@ -208,3 +208,11 @@ pub async fn print_order(
     orders::mark_printed(&state.db, &id).await.map_err(|e| e.to_string())?;
     Ok("Printed".into())
 }
+
+#[tauri::command]
+pub async fn delete_order(
+    state: State<'_, AppState>,
+    id: String,
+) -> Result<(), String> {
+    orders::delete_order(&state.db, &id).await.map_err(|e| e.to_string())
+}

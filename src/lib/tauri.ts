@@ -53,4 +53,5 @@ export const ordersApi = {
     invoke<string>('print_order', { config, id }),
   update: (id: string, payload: OrderEditPayload) =>
     invoke<void>('update_order', { id, payload }),
+  delete: (id: string) => invoke<void>('delete_order', { id }),
 };
