@@ -1,12 +1,11 @@
-use crc::{Crc, CRC_16_XMODEM};
+use crc::{Crc, CRC_16_IBM_3740};
 
-// Thai PromptPay QR uses CRC-16 with the XMODEM polynomial (0x1021) and an
-// initial value of 0x0000. This is what bank scanners (Krungthai/Bualuang/
-// SCB Easy) actually accept in the wild and matches the reference
-// implementations at https://github.com/ptwptwz/promptpay and
-// dtinth/promptpay-qr. Despite the EMVCo TR-1 spec naming "CRC-16/CCITT"
-// (init 0xFFFF), real-world Thai PromptPay deployments use init 0x0000.
-const CRC16: Crc<u16> = Crc::<u16>::new(&CRC_16_XMODEM);
+// Thai PromptPay QR uses CRC-16/CCITT-FALSE (poly 0x1021, init 0xFFFF, no
+// reflect, no xorout). The `crc` crate exposes this algorithm as
+// `CRC_16_IBM_3740`. Matches the EMVCo TR-1 spec and the reference
+// implementations dtinth/promptpay-qr (via `crc.crc16ccitt`) and
+// ptwptwz/promptpay. Scanned and verified against a real Thai bank app.
+const CRC16: Crc<u16> = Crc::<u16>::new(&CRC_16_IBM_3740);
 
 /// Account type for PromptPay QR generation.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -123,15 +122,16 @@ mod tests {
     }
 
     /// Regression test for the CRC bug: PromptPay rejected payloads built with
-    /// CRC-16/XMODEM. With the correct CRC-16/CCITT-FALSE we produce the exact
-    /// payload that a known-good Thai bank app produces for this input.
+    /// CRC-16/XMODEM (init 0x0000). With the correct CRC-16/CCITT-FALSE
+    /// (init 0xFFFF) we produce a payload accepted by Thai bank apps —
+    /// verified by scanning the rendered QR with a real bank app.
     #[test]
     fn test_known_good_id_card_payload() {
         let result =
             generate_promptpay_qr(AccountType::IdCard, "1100700546038", 415.00, false);
         assert_eq!(
             result,
-            "00020101021129370016A000000677010111021311007005460385802TH53037645406415.006304C221"
+            "00020101021129370016A000000677010111021311007005460385802TH53037645406415.006304FFC4"
         );
     }
 }
