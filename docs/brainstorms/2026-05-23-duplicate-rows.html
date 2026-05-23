@@ -1,0 +1,579 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8" />
+<title>Brainstorm — Handling duplicate-row customers in Orders</title>
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<style>
+  :root {
+    --bg: #fafaf7;
+    --card: #ffffff;
+    --ink: #1a1a1a;
+    --muted: #6b6b6b;
+    --line: #e5e5e0;
+    --accent: #2563eb;
+    --accent-soft: #eff6ff;
+    --good: #15803d;
+    --good-soft: #ecfdf5;
+    --warn: #b45309;
+    --warn-soft: #fef3c7;
+    --bad: #b91c1c;
+    --bad-soft: #fef2f2;
+    --pick: #7c2d12;
+    --pick-soft: #fff7ed;
+  }
+  * { box-sizing: border-box; }
+  body {
+    margin: 0;
+    font: 15px/1.55 -apple-system, BlinkMacSystemFont, "Segoe UI", Helvetica, Arial, sans-serif;
+    color: var(--ink);
+    background: var(--bg);
+  }
+  .wrap { max-width: 1080px; margin: 0 auto; padding: 32px 24px 80px; }
+  header.page {
+    border-bottom: 1px solid var(--line);
+    padding-bottom: 20px;
+    margin-bottom: 32px;
+  }
+  header.page .eyebrow {
+    text-transform: uppercase;
+    letter-spacing: 0.08em;
+    font-size: 11px;
+    color: var(--muted);
+    font-weight: 600;
+  }
+  header.page h1 {
+    margin: 6px 0 8px;
+    font-size: 28px;
+    letter-spacing: -0.01em;
+  }
+  header.page p { margin: 0; color: var(--muted); max-width: 70ch; }
+
+  h2 { font-size: 18px; margin: 40px 0 12px; letter-spacing: -0.005em; }
+  h3 { font-size: 15px; margin: 0 0 6px; }
+
+  .lede {
+    background: var(--card);
+    border: 1px solid var(--line);
+    border-radius: 10px;
+    padding: 16px 18px;
+  }
+
+  /* Use-case cards */
+  .cases { display: grid; grid-template-columns: repeat(3, 1fr); gap: 12px; margin-top: 12px; }
+  .case {
+    background: var(--card);
+    border: 1px solid var(--line);
+    border-radius: 10px;
+    padding: 14px 16px;
+  }
+  .case .tag {
+    display: inline-block; font-size: 11px; font-weight: 600;
+    padding: 2px 8px; border-radius: 999px; margin-bottom: 6px;
+  }
+  .case .freq { font-size: 12px; color: var(--muted); margin-top: 8px; }
+  .tag-primary { background: var(--accent-soft); color: var(--accent); }
+  .tag-edge    { background: var(--warn-soft); color: var(--warn); }
+  .tag-mistake { background: var(--bad-soft);  color: var(--bad);  }
+
+  /* Mocked POS list row */
+  .mock {
+    background: var(--card);
+    border: 1px solid var(--line);
+    border-radius: 10px;
+    overflow: hidden;
+    font-size: 13px;
+  }
+  .mock-head, .mock-row {
+    display: grid;
+    grid-template-columns: 28px 90px 1fr 100px 90px 110px;
+    gap: 10px;
+    padding: 9px 12px;
+    align-items: center;
+  }
+  .mock-head {
+    background: #f5f5f0;
+    color: var(--muted);
+    text-transform: uppercase;
+    font-size: 10px;
+    letter-spacing: 0.08em;
+    border-bottom: 1px solid var(--line);
+  }
+  .mock-row { border-bottom: 1px solid var(--line); }
+  .mock-row:last-child { border-bottom: 0; }
+  .mock-row.selected { background: var(--accent-soft); }
+  .mock-row.grouped  { background: #fffbeb; }
+  .mock-row .num { font-family: ui-monospace, SFMono-Regular, Menlo, monospace; }
+  .mock-row .total { text-align: right; font-variant-numeric: tabular-nums; }
+  .pill {
+    font-size: 10px; padding: 1px 6px; border-radius: 999px;
+    background: #f1f1ec; color: var(--muted);
+  }
+  .pill.group { background: var(--warn-soft); color: var(--warn); }
+  .btn {
+    background: var(--accent); color: white; border: 0;
+    padding: 4px 10px; border-radius: 6px; font-size: 12px;
+    font-weight: 500;
+  }
+  .btn.ghost  { background: transparent; color: var(--ink); border: 1px solid var(--line); }
+  .btn.danger { background: var(--bad); }
+
+  /* Option cards */
+  .options { display: grid; gap: 18px; }
+  .option {
+    background: var(--card);
+    border: 1px solid var(--line);
+    border-radius: 12px;
+    overflow: hidden;
+  }
+  .option.picked { border-color: var(--pick); box-shadow: 0 0 0 3px var(--pick-soft); }
+  .option header {
+    padding: 14px 18px;
+    border-bottom: 1px solid var(--line);
+    display: flex; align-items: baseline; gap: 12px;
+    flex-wrap: wrap;
+  }
+  .option header h3 { margin: 0; font-size: 16px; }
+  .option header .label {
+    font-size: 11px; font-weight: 700; letter-spacing: 0.04em;
+    text-transform: uppercase; color: var(--muted);
+  }
+  .option header .pick {
+    font-size: 11px; font-weight: 700; letter-spacing: 0.04em;
+    text-transform: uppercase; color: var(--pick);
+    background: var(--pick-soft); padding: 2px 8px; border-radius: 999px;
+  }
+  .option header .summary { color: var(--muted); font-size: 13px; flex: 1 1 100%; }
+  .option .body { padding: 16px 18px; }
+  .option .twocol {
+    display: grid; grid-template-columns: 1.4fr 1fr; gap: 18px;
+  }
+  @media (max-width: 720px) {
+    .option .twocol { grid-template-columns: 1fr; }
+    .cases { grid-template-columns: 1fr; }
+    .mock-head, .mock-row { grid-template-columns: 80px 1fr 80px; }
+    .mock-head .col-hide, .mock-row .col-hide { display: none; }
+  }
+
+  .pros, .cons {
+    margin: 0; padding: 10px 12px;
+    border-radius: 8px;
+    list-style: none;
+    font-size: 13px;
+  }
+  .pros { background: var(--good-soft); }
+  .cons { background: var(--bad-soft); }
+  .pros li::before { content: "✓ "; color: var(--good); font-weight: 700; }
+  .cons li::before { content: "✗ "; color: var(--bad); font-weight: 700; }
+  .pros li, .cons li { padding: 2px 0; }
+
+  /* Compare table */
+  table.compare {
+    width: 100%; border-collapse: collapse; background: var(--card);
+    border: 1px solid var(--line); border-radius: 10px; overflow: hidden;
+    font-size: 13px;
+  }
+  table.compare th, table.compare td {
+    padding: 10px 12px; border-bottom: 1px solid var(--line); text-align: left;
+    vertical-align: top;
+  }
+  table.compare th { background: #f5f5f0; font-weight: 600; font-size: 12px; color: var(--muted); text-transform: uppercase; letter-spacing: 0.04em; }
+  table.compare tr:last-child td { border-bottom: 0; }
+  table.compare .verdict-yes  { color: var(--good); font-weight: 600; }
+  table.compare .verdict-no   { color: var(--bad);  font-weight: 600; }
+  table.compare .verdict-meh  { color: var(--warn); font-weight: 600; }
+
+  details {
+    background: var(--card); border: 1px solid var(--line); border-radius: 10px;
+    padding: 8px 14px; margin-top: 12px;
+  }
+  details summary { cursor: pointer; font-weight: 600; }
+  details[open] { padding-bottom: 14px; }
+
+  .callout {
+    border-left: 3px solid var(--accent);
+    background: var(--accent-soft);
+    padding: 10px 14px;
+    border-radius: 0 8px 8px 0;
+    margin: 12px 0;
+    font-size: 13px;
+  }
+  .callout.warn { border-color: var(--warn); background: var(--warn-soft); }
+
+  code, .mono { font-family: ui-monospace, SFMono-Regular, Menlo, monospace; font-size: 13px; }
+</style>
+</head>
+<body>
+<div class="wrap">
+
+<header class="page">
+  <div class="eyebrow">Brainstorm · 2026-05-23</div>
+  <h1>Handling duplicate-customer rows in the Orders list</h1>
+  <p>
+    Your wife sometimes splits one customer across multiple sheet rows (e.g. <strong>K.Ing</strong>:
+    one row per cake, but she pays for both). Today each row becomes a separate order with its own
+    receipt and QR. We need a way to <em>combine</em> these at checkout — and to <em>delete</em>
+    obvious duplicates — without breaking the sync model.
+  </p>
+</header>
+
+<section>
+  <h2>The use cases we're solving for</h2>
+  <div class="cases">
+    <div class="case">
+      <span class="tag tag-primary">Primary</span>
+      <h3>Same person, split rows on purpose</h3>
+      <div>Wife wrote 2 rows for K.Ing so the kitchen prepares two distinct cakes. K.Ing pays once and wants <strong>one receipt</strong> with both items.</div>
+      <div class="freq">Happens regularly. This is the case you described.</div>
+    </div>
+    <div class="case">
+      <span class="tag tag-edge">Edge</span>
+      <h3>Ordered together but separate receipts</h3>
+      <div>A friend orders through K.Ing but wants their own receipt + QR. Two rows that should stay two orders, but be handed over as a pair.</div>
+      <div class="freq">Occasional.</div>
+    </div>
+    <div class="case">
+      <span class="tag tag-mistake">Mistake</span>
+      <h3>Accidental duplicate</h3>
+      <div>Wife typed the same order twice, or a row is empty / wrong. Should just disappear.</div>
+      <div class="freq">Rare but disruptive.</div>
+    </div>
+  </div>
+</section>
+
+<section>
+  <h2>The constraint that shapes everything</h2>
+  <div class="lede">
+    The Google Sheet is the <strong>source of truth</strong>. Sync upserts by
+    <code>(source_tab, source_row)</code>. Anything we do in-app to combine or hide rows has to
+    survive the next sync — otherwise the merge will silently un-merge itself when she taps
+    Re-sync. You already have the two primitives we need for this:
+    <code>sync_locked</code> (sync ignores the row) and soft-delete (<code>deleted_at</code>).
+  </div>
+</section>
+
+<section>
+  <h2>Four approaches worth considering</h2>
+  <div class="options">
+
+    <!-- Option A -->
+    <article class="option">
+      <header>
+        <span class="label">Option A</span>
+        <h3>"Print together" — combine at print time, no DB merge</h3>
+        <div class="summary">
+          Cashier ticks 2+ rows in the list, taps <em>Print together</em>. We render one receipt
+          with all line items summed and one QR for the combined total. The orders stay separate
+          in the database; nothing is locked, deleted, or merged.
+        </div>
+      </header>
+      <div class="body">
+        <div class="twocol">
+          <div>
+            <div class="mock" aria-label="Mock list with two rows selected">
+              <div class="mock-head">
+                <div>✓</div><div>Order #</div><div>Customer</div><div class="col-hide">Items</div><div class="col-hide total">Total</div><div></div>
+              </div>
+              <div class="mock-row selected">
+                <div>☑︎</div><div class="num">Order_30-04</div><div>K.Ing</div><div class="col-hide">1× Choc Lava</div><div class="col-hide total">฿180</div><div></div>
+              </div>
+              <div class="mock-row selected">
+                <div>☑︎</div><div class="num">Order_30-05</div><div>K.Ing</div><div class="col-hide">1× Matcha Roll</div><div class="col-hide total">฿220</div><div></div>
+              </div>
+              <div class="mock-row">
+                <div>☐</div><div class="num">Order_30-06</div><div>P.Som</div><div class="col-hide">2× Brownie</div><div class="col-hide total">฿160</div><div><button class="btn ghost">Print</button></div>
+              </div>
+            </div>
+            <div style="margin-top:8px; display:flex; gap:6px; align-items:center; font-size:12px; color:var(--muted);">
+              When ≥2 rows are selected → toolbar shows <button class="btn" style="margin:0 4px;">Print together (฿400)</button>
+            </div>
+          </div>
+          <div>
+            <ul class="pros">
+              <li>Zero schema change — nothing to migrate.</li>
+              <li>100% safe with sync: the rows are untouched.</li>
+              <li>Reversible by definition (nothing to undo).</li>
+              <li>Handles 2, 3, or N rows the same way.</li>
+              <li>Edge case "two friends, hand over together" is solved by a sibling button: <em>Print separately, side-by-side</em>.</li>
+            </ul>
+            <ul class="cons" style="margin-top:8px;">
+              <li>Orders still show as two rows in the list — visual clutter remains.</li>
+              <li>"Printed" state is per-row; we have to decide whether the combined print marks both as printed (yes, probably).</li>
+              <li>Reports/analytics later will count two orders, not one.</li>
+            </ul>
+          </div>
+        </div>
+      </div>
+    </article>
+
+    <!-- Option B -->
+    <article class="option picked">
+      <header>
+        <span class="label">Option B</span>
+        <h3>True merge — fold rows into one master order, lock the sources</h3>
+        <span class="pick">Recommended</span>
+        <div class="summary">
+          Pick 2+ rows → <em>Merge</em>. One row becomes the master; the others contribute their
+          items into it, then are soft-deleted and <code>sync_locked</code>. Re-sync ignores them.
+          The master shows all items, one total, one QR. Un-merge is a separate action.
+        </div>
+      </header>
+      <div class="body">
+        <div class="twocol">
+          <div>
+            <div class="mock" aria-label="Mock list after merge">
+              <div class="mock-head">
+                <div></div><div>Order #</div><div>Customer</div><div class="col-hide">Items</div><div class="col-hide total">Total</div><div></div>
+              </div>
+              <div class="mock-row">
+                <div></div>
+                <div class="num">Order_30-04 <span class="pill group">merged ×2</span></div>
+                <div>K.Ing</div>
+                <div class="col-hide">Choc Lava, Matcha Roll</div>
+                <div class="col-hide total">฿400</div>
+                <div><button class="btn">Print</button></div>
+              </div>
+              <div class="mock-row">
+                <div></div><div class="num">Order_30-06</div><div>P.Som</div><div class="col-hide">2× Brownie</div><div class="col-hide total">฿160</div><div><button class="btn ghost">Print</button></div>
+              </div>
+            </div>
+            <div style="margin-top:8px; font-size:12px; color:var(--muted);">
+              Source rows (Order_30-05) are hidden but reachable under <em>Show removed</em> with
+              a <span class="pill">merged into 04</span> badge.
+            </div>
+          </div>
+          <div>
+            <ul class="pros">
+              <li>The Orders list visually matches reality — one customer, one row.</li>
+              <li>Reports & "Reprint" act on the real combined order.</li>
+              <li>Reuses what's already there: <code>sync_locked</code>, <code>deleted_at</code>.</li>
+              <li>Un-merge is feasible because we keep the original line items tagged with their <code>source_row</code>.</li>
+            </ul>
+            <ul class="cons" style="margin-top:8px;">
+              <li>Requires a small schema addition (<code>merged_into_id</code> on order).</li>
+              <li>If wife later <em>edits</em> the merged-away row in the sheet, the edit is silently ignored (because the row is locked). We mitigate with a sync warning: <em>"Order_30-05 changed in the sheet but is merged — review?"</em></li>
+              <li>Slightly more code than Option A.</li>
+            </ul>
+          </div>
+        </div>
+      </div>
+    </article>
+
+    <!-- Option C -->
+    <article class="option">
+      <header>
+        <span class="label">Option C</span>
+        <h3>Group — link rows without merging them</h3>
+        <div class="summary">
+          Select 2+ rows → <em>Group as one payment</em>. The list shows them as a stacked card
+          with a single "Print group" button, but each row is still an independent order under
+          the hood. Best when intent is ambiguous (sometimes one receipt, sometimes two).
+        </div>
+      </header>
+      <div class="body">
+        <div class="twocol">
+          <div>
+            <div class="mock">
+              <div class="mock-head">
+                <div></div><div>Order #</div><div>Customer</div><div class="col-hide">Items</div><div class="col-hide total">Total</div><div></div>
+              </div>
+              <div class="mock-row grouped">
+                <div>▾</div>
+                <div class="num">Group A · 2 orders</div>
+                <div>K.Ing</div>
+                <div class="col-hide">Choc Lava, Matcha Roll</div>
+                <div class="col-hide total">฿400</div>
+                <div><button class="btn">Print group</button></div>
+              </div>
+              <div class="mock-row" style="background:#fffdf6;">
+                <div></div><div class="num">  ↳ Order_30-04</div><div>K.Ing</div><div class="col-hide">Choc Lava</div><div class="col-hide total">฿180</div><div><button class="btn ghost">Print only</button></div>
+              </div>
+              <div class="mock-row" style="background:#fffdf6;">
+                <div></div><div class="num">  ↳ Order_30-05</div><div>K.Ing</div><div class="col-hide">Matcha Roll</div><div class="col-hide total">฿220</div><div><button class="btn ghost">Print only</button></div>
+              </div>
+            </div>
+          </div>
+          <div>
+            <ul class="pros">
+              <li>Doesn't destroy data — both intents (one receipt OR two together) supported.</li>
+              <li>Edits from the sheet still flow into each child order.</li>
+              <li>Models the friend-orders-through-K.Ing case naturally.</li>
+            </ul>
+            <ul class="cons" style="margin-top:8px;">
+              <li>New concept ("group") for the cashier to learn.</li>
+              <li>Most complex UI of the four — expand/collapse, group vs row actions.</li>
+              <li>Needs its own table (<code>order_group</code>) — biggest schema change.</li>
+            </ul>
+          </div>
+        </div>
+      </div>
+    </article>
+
+    <!-- Option D -->
+    <article class="option">
+      <header>
+        <span class="label">Option D</span>
+        <h3>Delete only — soft-delete the unwanted row, edit the other</h3>
+        <div class="summary">
+          Add a delete (soft-remove) button to each row, plus the existing <em>Edit order</em>
+          dialog to add the missing item into the surviving order. Doesn't really solve K.Ing on
+          its own; only solves the duplicate-mistake case.
+        </div>
+      </header>
+      <div class="body">
+        <ul class="pros">
+          <li>Smallest possible change — basically one new button.</li>
+          <li>Soft-delete already exists in the schema.</li>
+        </ul>
+        <ul class="cons" style="margin-top:8px;">
+          <li>For K.Ing it's a 3-step manual dance: delete row B, open row A, add B's items, save. Easy to mess up.</li>
+          <li>Loses the audit trail of what was actually written on the sheet.</li>
+        </ul>
+      </div>
+    </article>
+
+  </div>
+</section>
+
+<section>
+  <h2>Side-by-side</h2>
+  <table class="compare">
+    <thead>
+      <tr>
+        <th>Capability</th>
+        <th>A · Print together</th>
+        <th>B · Merge (rec.)</th>
+        <th>C · Group</th>
+        <th>D · Delete only</th>
+      </tr>
+    </thead>
+    <tbody>
+      <tr>
+        <td>Solves K.Ing case</td>
+        <td class="verdict-yes">Yes</td>
+        <td class="verdict-yes">Yes</td>
+        <td class="verdict-yes">Yes</td>
+        <td class="verdict-meh">Manual</td>
+      </tr>
+      <tr>
+        <td>Solves "friend, separate receipts but together"</td>
+        <td class="verdict-yes">Yes (sibling button)</td>
+        <td class="verdict-no">No</td>
+        <td class="verdict-yes">Yes</td>
+        <td class="verdict-no">No</td>
+      </tr>
+      <tr>
+        <td>Solves accidental duplicate</td>
+        <td class="verdict-no">No (still need delete)</td>
+        <td class="verdict-yes">Yes (merge "into nothing" = delete)</td>
+        <td class="verdict-no">No (still need delete)</td>
+        <td class="verdict-yes">Yes</td>
+      </tr>
+      <tr>
+        <td>Schema change</td>
+        <td class="verdict-yes">None</td>
+        <td class="verdict-meh">+1 column</td>
+        <td class="verdict-no">+1 table</td>
+        <td class="verdict-yes">None</td>
+      </tr>
+      <tr>
+        <td>Survives re-sync</td>
+        <td class="verdict-yes">Trivially</td>
+        <td class="verdict-yes">Via sync_locked</td>
+        <td class="verdict-yes">Children still sync</td>
+        <td class="verdict-meh">Need lock too</td>
+      </tr>
+      <tr>
+        <td>Reversible</td>
+        <td class="verdict-yes">No-op to undo</td>
+        <td class="verdict-yes">Un-merge action</td>
+        <td class="verdict-yes">Un-group action</td>
+        <td class="verdict-yes">Show removed</td>
+      </tr>
+      <tr>
+        <td>List visually deduplicated</td>
+        <td class="verdict-no">No</td>
+        <td class="verdict-yes">Yes</td>
+        <td class="verdict-meh">Grouped</td>
+        <td class="verdict-yes">Yes (after delete)</td>
+      </tr>
+      <tr>
+        <td>Implementation cost</td>
+        <td class="verdict-yes">Smallest</td>
+        <td class="verdict-meh">Medium</td>
+        <td class="verdict-no">Largest</td>
+        <td class="verdict-yes">Smallest</td>
+      </tr>
+    </tbody>
+  </table>
+</section>
+
+<section>
+  <h2>My recommendation</h2>
+  <div class="callout">
+    <strong>Ship Option B (Merge) + a small Delete action, in that order.</strong>
+    <ol style="margin: 8px 0 0 20px; padding: 0;">
+      <li><strong>Delete first</strong> (½-day): one row, one button, soft-delete + <code>sync_locked</code>. Solves the mistake case immediately and gives you the lock primitive on its own.</li>
+      <li><strong>Merge next</strong> (1–2 days): builds on delete. Pick 2+ rows → master is the lowest <code>source_row</code> → items copy into master → others get <code>deleted_at</code> + <code>sync_locked</code> + <code>merged_into_id = master</code>. Un-merge reads <code>merged_into_id</code> and reverses it.</li>
+    </ol>
+    Option A is tempting for its simplicity, but it leaves the list cluttered and creates a weird split between "displayed order count" and "real order count" that gets worse as more rows pile up over a week.
+  </div>
+  <div class="callout">
+    <strong>Sync edge case — the smart way:</strong> instead of locking merged-away rows and
+    warning when they change, we tag every line item with the <code>source_row</code> it came
+    from. Sync stays transparent: when a merged row changes in the sheet, the engine replaces the
+    items tagged with that row inside the master and recomputes the total. Wife keeps editing the
+    sheet like normal — no extra steps after the initial merge. <code>sync_locked</code> only
+    fires if she edits the merged order <em>inside the app</em> (discount, delivery fee), at
+    which point sheet edits are ignored as today.
+  </div>
+</section>
+
+<section>
+  <h2>Decisions (2026-05-23)</h2>
+  <ol>
+    <li><strong>Different customer names on merge:</strong> lenient — allow it, but pop a
+        confirm: <em>"Merge P.Som's order into K.Ing's? She'll get one receipt under K.Ing's name."</em></li>
+    <li><strong>Master row deleted from sheet:</strong> remove its row-tagged items from master,
+        soft-delete the master if nothing's left. Surface a sync notice.</li>
+    <li><strong>Discount &amp; delivery fee:</strong> sum on merge. If wife wants them split per
+        row she just doesn't merge — the per-row receipt path already works.</li>
+    <li><strong>Un-merge:</strong> defer. Merge has a confirm dialog; accidents should be rare.
+        Add the button later if it becomes a real pain.</li>
+  </ol>
+</section>
+
+<section>
+  <h2>What I'd build, concretely</h2>
+  <details>
+    <summary>UI changes</summary>
+    <ul>
+      <li>Add a checkbox column to <code>OrdersPage</code>; selecting 2+ reveals a toolbar with <em>Merge</em> and <em>Delete</em>.</li>
+      <li>Each row gets a trash icon next to the existing edit icon (1 row = quick delete).</li>
+      <li>Merged orders show a <code>merged ×N</code> pill next to the order number. Detail panel lists which source rows contributed which items.</li>
+      <li>"Show removed" checkbox already exists — extend to also surface merged-away rows with a <em>merged into 04</em> badge and a <em>Restore / un-merge</em> button.</li>
+    </ul>
+  </details>
+  <details>
+    <summary>Backend changes</summary>
+    <ul>
+      <li>Schema: add <code>merged_into_id TEXT NULL REFERENCES "order"(id)</code> on <code>order</code>. Items keep their existing <code>source_row</code> via a new column on <code>order_item</code> (or denormalized on the order).</li>
+      <li>New Tauri commands: <code>orders_delete(id)</code>, <code>orders_merge(ids[])</code>, <code>orders_unmerge(id)</code>.</li>
+      <li>Sync engine: when iterating sheet rows, skip any with non-null <code>merged_into_id</code> but compare the sheet content against the snapshot; if changed, push a warning into the existing sync-warnings surface.</li>
+    </ul>
+  </details>
+  <details>
+    <summary>Testing</summary>
+    <ul>
+      <li>Merge of 2 rows → one order with combined items, others soft-deleted + locked.</li>
+      <li>Re-sync after merge: no resurrection.</li>
+      <li>Sheet edits a merged-away row → sync produces a warning, does not modify the master.</li>
+      <li>Un-merge → master loses the donated items, donor row comes back, lock cleared.</li>
+      <li>Delete-only path: soft delete + lock, "show removed" reveals it, restore works.</li>
+    </ul>
+  </details>
+</section>
+
+</div>
+</body>
+</html>
