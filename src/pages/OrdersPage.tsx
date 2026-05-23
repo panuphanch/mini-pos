@@ -451,7 +451,7 @@ function OrderRow({
             )}
             {row.mergedIntoId && (
               <Badge variant="muted" className="font-normal" title="Merged into another order">
-                merged into
+                merged into {row.mergedIntoOrderNumber ?? '…'}
               </Badge>
             )}
           </div>

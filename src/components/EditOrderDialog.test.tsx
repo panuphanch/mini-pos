@@ -44,6 +44,7 @@ const baseDetail: OrderDetail = {
     { productId: 'p2', nameTh: 'ชาเย็น', quantity: 1, unitPrice: 50 },
   ],
   mergedIntoId: null,
+  mergedIntoOrderNumber: null,
   mergedFromCount: 0,
 };
 

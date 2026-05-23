@@ -53,6 +53,7 @@ export interface OrderListRow {
   itemsSummary: string;
   syncLocked: boolean;
   mergedIntoId: string | null;
+  mergedIntoOrderNumber: string | null;
   mergedFromCount: number;
 }
 
@@ -83,6 +84,7 @@ export interface OrderDetail {
   syncLocked: boolean;
   items: OrderDetailItem[];
   mergedIntoId: string | null;
+  mergedIntoOrderNumber: string | null;
   mergedFromCount: number;
 }
 

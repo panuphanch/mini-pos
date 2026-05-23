@@ -225,6 +225,17 @@ pub async fn apply_sync(
         .and_then(|(m,)| m);
 
         if let Some(master_id) = donor_master {
+            // Locked master: cashier has manually edited it via EditOrderDialog;
+            // don't overwrite their edits with sheet data.
+            let master_locked: (i64,) = sqlx::query_as(
+                r#"SELECT sync_locked FROM "order" WHERE id = ?"#,
+            )
+            .bind(&master_id).fetch_one(&mut *tx).await?;
+            if master_locked.0 != 0 {
+                keep_rows.push(ord.source_row);
+                continue;
+            }
+
             sqlx::query(
                 r#"DELETE FROM order_item WHERE order_id = ? AND source_row = ?"#,
             )
@@ -595,6 +606,63 @@ mod tests {
         assert_eq!(items.len(), 1, "row 6's item must be gone");
         assert_eq!(items[0].source_row, Some(5));
         assert_eq!(master.total_amount, 100);
+    }
+
+    #[tokio::test]
+    async fn locked_master_ignores_donor_row_edits_via_sync() {
+        use crate::db::orders::{merge_orders, apply_order_edit, get_with_items, EditOrderItem};
+
+        let pool = init_memory_pool().await.unwrap();
+        let tab = "Order_31";
+        // Use the same fixture format as merged_donor_row_edits_flow_into_master.
+        let make_sheet = |row6_qty: &str| {
+            make_vr(vec![
+                vec!["Choc",   "", "", "", "100"],
+                vec!["Matcha", "", "", "", "120"],
+                vec![""],
+                vec!["ช่องทาง", "ลูกค้า", "Choc", "Matcha"],
+                vec!["Page", "K.Ing", "1", ""],
+                vec!["Page", "K.Ing", "", row6_qty],
+            ])
+        };
+        let fake = FakeSheetsClient {
+            tabs: vec![tab.to_string()],
+            values: HashMap::from([(format!("{}!A1:Z200", tab), make_sheet("1"))]),
+        };
+        let preview = preview_sync(&pool, &fake, "x", tab).await.unwrap();
+        apply_sync(&pool, &fake, "x", tab, SyncMappings {
+            menu: preview.unknown_menus.iter().map(|m| (m.alias.clone(),
+                MenuMappingChoice::Create { name_th: m.alias.clone(), name_en: None, selling_price: m.suggested_price })).collect(),
+            customer: preview.unknown_customers.iter().map(|c| (c.alias.clone(),
+                CustomerMappingChoice::Create { name: c.alias.clone() })).collect(),
+        }).await.unwrap();
+
+        // Merge the two K.Ing rows, then lock the master via apply_order_edit.
+        let orders = crate::db::orders::list_by_tab(&pool, Some(tab), false, 100).await.unwrap();
+        let ids: Vec<String> = orders.iter().map(|o| o.id.clone()).collect();
+        let merged = merge_orders(&pool, &ids).await.unwrap();
+        let (master_before, items_before) = get_with_items(&pool, &merged.master_order_id).await.unwrap().unwrap();
+        let total_before = master_before.total_amount;
+        let item_count_before = items_before.len();
+
+        // Cashier edits the master in-app — keep items as-is but trigger the lock.
+        let edit_items: Vec<EditOrderItem> = items_before.iter().map(|it| EditOrderItem {
+            product_id: it.product_id.clone(),
+            quantity: it.quantity,
+            unit_price: it.unit_price,
+        }).collect();
+        apply_order_edit(&pool, &merged.master_order_id, &edit_items, 0, 0).await.unwrap();
+
+        // Sheet edits the Matcha row (source_row=6) to qty=3 — locked master must ignore.
+        let fake2 = FakeSheetsClient {
+            tabs: vec![tab.to_string()],
+            values: HashMap::from([(format!("{}!A1:Z200", tab), make_sheet("3"))]),
+        };
+        apply_sync(&pool, &fake2, "x", tab, SyncMappings { menu: vec![], customer: vec![] }).await.unwrap();
+
+        let (master_after, items_after) = get_with_items(&pool, &merged.master_order_id).await.unwrap().unwrap();
+        assert_eq!(master_after.total_amount, total_before, "locked master total must not change from sync");
+        assert_eq!(items_after.len(), item_count_before, "locked master items must not change from sync");
     }
 
     #[tokio::test]

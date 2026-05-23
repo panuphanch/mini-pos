@@ -51,6 +51,11 @@ jobs:
 
       - name: Build Tauri app
         run: npm run tauri build -- --bundles ${{ matrix.bundles }}
+        env:
+          # Ad-hoc sign the macOS .app so Gatekeeper stops reporting the
+          # bundle as "damaged" after download. First launch still needs
+          # right-click → Open once (no Developer ID). Ignored on Windows.
+          APPLE_SIGNING_IDENTITY: '-'
 
       - name: Upload bundle
         uses: actions/upload-artifact@v4

@@ -25,6 +25,7 @@ pub struct OrderListRow {
     pub items_summary: String,
     pub sync_locked: bool,
     pub merged_into_id: Option<String>,
+    pub merged_into_order_number: Option<String>,
     pub merged_from_count: i64,
 }
 
@@ -58,6 +59,7 @@ pub struct OrderDetail {
     pub deleted_at: Option<String>,
     pub sync_locked: bool,
     pub merged_into_id: Option<String>,
+    pub merged_into_order_number: Option<String>,
     pub merged_from_count: i64,
     pub items: Vec<OrderDetailItem>,
 }
@@ -105,6 +107,12 @@ pub async fn list_orders(
         let merged_from_count: (i64,) = sqlx::query_as(
             r#"SELECT COUNT(*) FROM "order" WHERE merged_into_id = ?"#,
         ).bind(&r.id).fetch_one(&state.db).await.map_err(|e| e.to_string())?;
+        let merged_into_order_number: Option<String> = if let Some(ref mid) = r.merged_into_id {
+            let row: Option<(String,)> = sqlx::query_as(
+                r#"SELECT order_number FROM "order" WHERE id = ?"#,
+            ).bind(mid).fetch_optional(&state.db).await.map_err(|e| e.to_string())?;
+            row.map(|t| t.0)
+        } else { None };
         out.push(OrderListRow {
             id: r.id, order_number: r.order_number, customer_name: cust,
             channel: r.channel, delivery_location: r.delivery_location,
@@ -115,6 +123,7 @@ pub async fn list_orders(
             notes: r.notes, items_summary,
             sync_locked: r.sync_locked != 0,
             merged_into_id: r.merged_into_id,
+            merged_into_order_number,
             merged_from_count: merged_from_count.0,
         });
     }
@@ -144,6 +153,12 @@ pub async fn get_order(
     let merged_from_count: (i64,) = sqlx::query_as(
         r#"SELECT COUNT(*) FROM "order" WHERE merged_into_id = ?"#,
     ).bind(&r.id).fetch_one(&state.db).await.map_err(|e| e.to_string())?;
+    let merged_into_order_number: Option<String> = if let Some(ref mid) = r.merged_into_id {
+        let row: Option<(String,)> = sqlx::query_as(
+            r#"SELECT order_number FROM "order" WHERE id = ?"#,
+        ).bind(mid).fetch_optional(&state.db).await.map_err(|e| e.to_string())?;
+        row.map(|t| t.0)
+    } else { None };
     Ok(Some(OrderDetail {
         id: r.id, order_number: r.order_number, customer_name: cust,
         channel: r.channel, delivery_location: r.delivery_location,
@@ -153,6 +168,7 @@ pub async fn get_order(
         printed_at: r.printed_at, print_count: r.print_count,
         deleted_at: r.deleted_at, sync_locked: r.sync_locked != 0,
         merged_into_id: r.merged_into_id,
+        merged_into_order_number,
         merged_from_count: merged_from_count.0,
         items: detail_items,
     }))
