@@ -72,10 +72,14 @@ pub async fn preview_sync(
         }
     }
 
-    // Count insert/update/soft-delete
+    // Count insert/update/soft-delete.
+    // Existing rows includes merged-away donors. We treat them as "exists"
+    // so the preview counters categorize sheet edits to them as updates,
+    // not inserts.
     let existing: Vec<(i64,)> = sqlx::query_as(
         r#"SELECT source_row FROM "order"
-           WHERE source_tab = ? AND deleted_at IS NULL"#,
+           WHERE source_tab = ?
+             AND (deleted_at IS NULL OR merged_into_id IS NOT NULL)"#,
     )
     .bind(tab).fetch_all(pool).await?;
     let existing_rows: std::collections::HashSet<i64> = existing.into_iter().map(|t| t.0).collect();
@@ -192,6 +196,8 @@ pub async fn apply_sync(
     let mut added = 0i64;
     let mut updated = 0i64;
     let mut keep_rows: Vec<i64> = Vec::new();
+    let mut masters_to_recompute: std::collections::HashSet<String> = std::collections::HashSet::new();
+
     for ord in &preview.parsed_orders {
         let cust_id = customer_alias_to_id.get(&ord.customer)
             .ok_or_else(|| anyhow!("Unresolved customer {}", ord.customer))?.clone();
@@ -206,6 +212,37 @@ pub async fn apply_sync(
             let unit = *product_price_by_id.get(&pid).unwrap_or(&0);
             total += unit * item.quantity;
             item_data.push((pid, item.quantity, unit));
+        }
+
+        // Pull-through path: if this row was merged into another order, refresh
+        // the master's items tagged with this row's source_row instead of doing
+        // the normal upsert (which would resurrect the donor's order shell).
+        let donor_master: Option<String> = sqlx::query_as::<_, (Option<String>,)>(
+            r#"SELECT merged_into_id FROM "order" WHERE source_tab = ? AND source_row = ?"#,
+        )
+        .bind(tab).bind(ord.source_row)
+        .fetch_optional(&mut *tx).await?
+        .and_then(|(m,)| m);
+
+        if let Some(master_id) = donor_master {
+            sqlx::query(
+                r#"DELETE FROM order_item WHERE order_id = ? AND source_row = ?"#,
+            )
+            .bind(&master_id).bind(ord.source_row).execute(&mut *tx).await?;
+            for (pid, qty, unit) in &item_data {
+                sqlx::query(
+                    r#"INSERT INTO order_item
+                       (id, order_id, product_id, quantity, unit_price, source_row)
+                       VALUES (?, ?, ?, ?, ?, ?)"#,
+                )
+                .bind(crate::db::ids::new_id())
+                .bind(&master_id).bind(pid).bind(qty).bind(unit).bind(ord.source_row)
+                .execute(&mut *tx).await?;
+            }
+            masters_to_recompute.insert(master_id);
+            keep_rows.push(ord.source_row);
+            updated += 1;
+            continue;
         }
 
         let items: Vec<orders::UpsertOrderItemInput<'_>> = item_data.iter().map(|(pid, qty, unit)| {
@@ -231,6 +268,44 @@ pub async fn apply_sync(
         keep_rows.push(ord.source_row);
     }
     let soft_deleted = orders::soft_delete_missing_rows(&mut tx, tab, &keep_rows).await?;
+
+    // If a donor row vanished from the sheet, its items must vanish from the
+    // master too. soft_delete_missing_rows skips merged-away rows, so we
+    // detect them here and strip their items.
+    let stale_donors: Vec<(String, i64)> = sqlx::query_as(
+        r#"SELECT merged_into_id, source_row FROM "order"
+           WHERE source_tab = ?
+             AND merged_into_id IS NOT NULL
+             AND source_row IS NOT NULL"#,
+    ).bind(tab).fetch_all(&mut *tx).await?;
+    for (master_id, row) in stale_donors {
+        if !keep_rows.contains(&row) {
+            sqlx::query(
+                r#"DELETE FROM order_item WHERE order_id = ? AND source_row = ?"#,
+            )
+            .bind(&master_id).bind(row).execute(&mut *tx).await?;
+            masters_to_recompute.insert(master_id);
+        }
+    }
+
+    // Recompute totals for any master that changed.
+    for master_id in &masters_to_recompute {
+        let row: (i64, i64, i64) = sqlx::query_as(
+            r#"SELECT
+                 COALESCE(SUM(oi.quantity * oi.unit_price), 0) AS subtotal,
+                 o.discount, o.delivery_fee
+               FROM "order" o
+               LEFT JOIN order_item oi ON oi.order_id = o.id
+               WHERE o.id = ?
+               GROUP BY o.id"#,
+        ).bind(master_id).fetch_one(&mut *tx).await?;
+        let new_total = (row.0 - row.1 + row.2).max(0);
+        sqlx::query(
+            r#"UPDATE "order" SET total_amount = ?, updated_at = ? WHERE id = ?"#,
+        ).bind(new_total).bind(crate::db::ids::now_iso()).bind(master_id)
+        .execute(&mut *tx).await?;
+    }
+
     tx.commit().await?;
 
     orders::upsert_week_mapping(pool, tab, &preview.week_start_date).await?;
@@ -409,6 +484,117 @@ mod tests {
         let full = crate::db::products::find_by_alias(&pool, "FullName").await.unwrap().unwrap();
         let short = crate::db::products::find_by_alias(&pool, "Short").await.unwrap().unwrap();
         assert_eq!(full.id, short.id);
+    }
+
+    #[tokio::test]
+    async fn merged_donor_row_edits_flow_into_master() {
+        use crate::db::orders::{merge_orders, get_with_items};
+
+        let pool = init_memory_pool().await.unwrap();
+        let tab = "Order_30";
+        // Both Choc and Matcha in the top menu with proper prices.
+        // Layout (0-indexed):
+        //   0: Choc   menu item  (price at col4 = 100)
+        //   1: Matcha menu item  (price at col4 = 120)
+        //   2: blank  → stops menu loop
+        //   3: ช่องทาง header
+        //   4: K.Ing Choc row   → source_row = 5
+        //   5: K.Ing Matcha row → source_row = 6
+        let make_sheet = |row6_qty: &str| {
+            make_vr(vec![
+                vec!["Choc",   "", "", "", "100"],
+                vec!["Matcha", "", "", "", "120"],
+                vec![""],
+                vec!["ช่องทาง", "ลูกค้า", "Choc", "Matcha"],
+                vec!["Page", "K.Ing", "1", ""],
+                vec!["Page", "K.Ing", "", row6_qty],
+            ])
+        };
+        let fake = FakeSheetsClient {
+            tabs: vec![tab.to_string()],
+            values: HashMap::from([(format!("{}!A1:Z200", tab), make_sheet("1"))]),
+        };
+        let preview = preview_sync(&pool, &fake, "x", tab).await.unwrap();
+        let mappings = SyncMappings {
+            menu: preview.unknown_menus.iter().map(|m| (m.alias.clone(),
+                MenuMappingChoice::Create { name_th: m.alias.clone(), name_en: None, selling_price: m.suggested_price })).collect(),
+            customer: preview.unknown_customers.iter().map(|c| (c.alias.clone(),
+                CustomerMappingChoice::Create { name: c.alias.clone() })).collect(),
+        };
+        apply_sync(&pool, &fake, "x", tab, mappings).await.unwrap();
+
+        // Merge the two K.Ing rows.
+        let orders = crate::db::orders::list_by_tab(&pool, Some(tab), false, 100).await.unwrap();
+        assert_eq!(orders.len(), 2);
+        let ids: Vec<String> = orders.iter().map(|o| o.id.clone()).collect();
+        let merged = merge_orders(&pool, &ids).await.unwrap();
+
+        // Wife edits the Matcha row (source_row=6) to qty=3.
+        let fake2 = FakeSheetsClient {
+            tabs: vec![tab.to_string()],
+            values: HashMap::from([(format!("{}!A1:Z200", tab), make_sheet("3"))]),
+        };
+        apply_sync(&pool, &fake2, "x", tab, SyncMappings { menu: vec![], customer: vec![] }).await.unwrap();
+
+        // Master now reflects qty=3 for source_row=6; qty=1 for source_row=5 still.
+        let (master, items) = get_with_items(&pool, &merged.master_order_id).await.unwrap().unwrap();
+        let row5 = items.iter().find(|i| i.source_row == Some(5)).expect("row 5 item");
+        let row6 = items.iter().find(|i| i.source_row == Some(6)).expect("row 6 item");
+        assert_eq!(row5.quantity, 1);
+        assert_eq!(row6.quantity, 3);
+        // Total = 100*1 + 120*3 = 460
+        assert_eq!(master.total_amount, 460);
+    }
+
+    #[tokio::test]
+    async fn merged_donor_row_removed_from_sheet_strips_its_items_from_master() {
+        use crate::db::orders::{merge_orders, get_with_items};
+
+        let pool = init_memory_pool().await.unwrap();
+        let tab = "Order_32";
+        let two_rows = make_vr(vec![
+            vec!["Choc",   "", "", "", "100"],
+            vec!["Matcha", "", "", "", "120"],
+            vec![""],
+            vec!["ช่องทาง", "ลูกค้า", "Choc", "Matcha"],
+            vec!["Page", "K.Ing", "1", ""],
+            vec!["Page", "K.Ing", "", "1"],
+        ]);
+        // source_rows: row4→5, row5→6
+        let fake = FakeSheetsClient {
+            tabs: vec![tab.to_string()],
+            values: HashMap::from([(format!("{}!A1:Z200", tab), two_rows)]),
+        };
+        let p = preview_sync(&pool, &fake, "x", tab).await.unwrap();
+        apply_sync(&pool, &fake, "x", tab, SyncMappings {
+            menu: p.unknown_menus.iter().map(|m| (m.alias.clone(),
+                MenuMappingChoice::Create { name_th: m.alias.clone(), name_en: None, selling_price: m.suggested_price })).collect(),
+            customer: p.unknown_customers.iter().map(|c| (c.alias.clone(),
+                CustomerMappingChoice::Create { name: c.alias.clone() })).collect(),
+        }).await.unwrap();
+
+        let orders = crate::db::orders::list_by_tab(&pool, Some(tab), false, 100).await.unwrap();
+        let ids: Vec<String> = orders.iter().map(|o| o.id.clone()).collect();
+        let merged = merge_orders(&pool, &ids).await.unwrap();
+
+        // Sheet drops the second K.Ing row (source_row=6).
+        let one_row = make_vr(vec![
+            vec!["Choc",   "", "", "", "100"],
+            vec!["Matcha", "", "", "", "120"],
+            vec![""],
+            vec!["ช่องทาง", "ลูกค้า", "Choc", "Matcha"],
+            vec!["Page", "K.Ing", "1", ""],
+        ]);
+        let fake2 = FakeSheetsClient {
+            tabs: vec![tab.to_string()],
+            values: HashMap::from([(format!("{}!A1:Z200", tab), one_row)]),
+        };
+        apply_sync(&pool, &fake2, "x", tab, SyncMappings { menu: vec![], customer: vec![] }).await.unwrap();
+
+        let (master, items) = get_with_items(&pool, &merged.master_order_id).await.unwrap().unwrap();
+        assert_eq!(items.len(), 1, "row 6's item must be gone");
+        assert_eq!(items[0].source_row, Some(5));
+        assert_eq!(master.total_amount, 100);
     }
 
     #[tokio::test]
