@@ -1,25 +1,14 @@
-__pycache__
-dist
-build
-Drivers
-Eel.egg-info
-.tmp
 .DS_Store
-*.pyc
-*.swp
-venv/
-*venv*/
-.tox
-_internal/*.json
-**/*.spec
 .claude
 
-# Tauri / Node
+# Node / Vite
 node_modules/
 dist/
+
+# Tauri
 src-tauri/target/
 src-tauri/gen/
 
-# Worktrees
+# Worktrees and ad-hoc logs
 .worktrees/
 logs/

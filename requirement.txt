@@ -1,7 +1,0 @@
-eel
-python-escpos
-pyinstaller
-gspread
-oauth2client
-pandas
-wcwidth
