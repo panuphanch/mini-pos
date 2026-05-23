@@ -52,6 +52,8 @@ export interface OrderListRow {
   notes: string | null;
   itemsSummary: string;
   syncLocked: boolean;
+  mergedIntoId: string | null;
+  mergedFromCount: number;
 }
 
 export interface OrderDetailItem {
@@ -80,6 +82,14 @@ export interface OrderDetail {
   deletedAt: string | null;
   syncLocked: boolean;
   items: OrderDetailItem[];
+  mergedIntoId: string | null;
+  mergedFromCount: number;
+}
+
+export interface MergeResult {
+  masterOrderId: string;
+  masterOrderNumber: string;
+  mergedCount: number;
 }
 
 export interface OrderEditItem {

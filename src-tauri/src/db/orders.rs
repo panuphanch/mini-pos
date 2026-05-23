@@ -335,7 +335,6 @@ pub async fn delete_order(pool: &SqlitePool, order_id: &str) -> Result<(), sqlx:
     Ok(())
 }
 
-#[allow(dead_code)]
 #[derive(Debug)]
 pub struct MergeOutcome {
     pub master_order_id: String,
@@ -354,7 +353,6 @@ pub struct MergeOutcome {
 ///   * No order may already be merged-away (`merged_into_id IS NOT NULL`).
 ///   * No order may be `sync_locked` (manual override; merge would replace it).
 ///   * No order may be soft-deleted.
-#[allow(dead_code)]
 pub async fn merge_orders(
     pool: &SqlitePool,
     order_ids: &[String],

@@ -43,6 +43,7 @@ pub fn run() {
             commands::orders::print_order,
             commands::orders::update_order,
             commands::orders::delete_order,
+            commands::orders::merge_orders,
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");
