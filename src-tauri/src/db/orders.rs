@@ -139,21 +139,27 @@ pub async fn upsert_from_source(
     };
 
     // Locked rows keep their items as-is. Refresh them only when the row is
-    // either brand new or being updated from the sheet.
+    // either brand new or being updated from the sheet, AND only for items
+    // tagged with this sheet row. Other source_rows' items stay (the merge
+    // feature relies on this: a master order holds items from multiple
+    // source_rows).
     let is_locked: (i64,) = sqlx::query_as(
         r#"SELECT sync_locked FROM "order" WHERE id = ?"#,
     )
     .bind(&order_id).fetch_one(&mut **tx).await?;
     if is_locked.0 == 0 {
-        sqlx::query(r#"DELETE FROM order_item WHERE order_id = ?"#)
-            .bind(&order_id).execute(&mut **tx).await?;
+        sqlx::query(
+            r#"DELETE FROM order_item WHERE order_id = ? AND source_row = ?"#,
+        )
+        .bind(&order_id).bind(input.source_row).execute(&mut **tx).await?;
         for item in input.items {
             sqlx::query(
-                r#"INSERT INTO order_item (id, order_id, product_id, quantity, unit_price)
-                   VALUES (?, ?, ?, ?, ?)"#,
+                r#"INSERT INTO order_item
+                   (id, order_id, product_id, quantity, unit_price, source_row)
+                   VALUES (?, ?, ?, ?, ?, ?)"#,
             )
             .bind(new_id()).bind(&order_id).bind(item.product_id)
-            .bind(item.quantity).bind(item.unit_price)
+            .bind(item.quantity).bind(item.unit_price).bind(input.source_row)
             .execute(&mut **tx).await?;
         }
     }
@@ -640,6 +646,47 @@ mod tests {
         let err = delete_order(&pool, &out.order_id).await.unwrap_err();
         assert!(matches!(err, sqlx::Error::Protocol(_)),
             "expected Protocol error, got {:?}", err);
+    }
+
+    #[tokio::test]
+    async fn upsert_only_refreshes_items_tagged_with_its_source_row() {
+        // Simulates the post-merge state by hand: one order owns items tagged with
+        // two different source_rows. Re-running upsert for source_row=11 must only
+        // touch items tagged 11 and leave items tagged 12 alone.
+        let pool = init_memory_pool().await.unwrap();
+        let (p, c) = seed_pc(&pool).await;
+
+        let mut tx = pool.begin().await.unwrap();
+        let out = upsert_from_source(&mut tx, UpsertOrderInput {
+            customer_id: &c.id, channel: None, delivery_location: None, notes: None,
+            total_amount: 85, order_date: "2026-05-11",
+            source_tab: "Order_30", source_row: 11,
+            items: vec![UpsertOrderItemInput { product_id: &p.id, quantity: 1, unit_price: 85 }],
+        }).await.unwrap();
+        tx.commit().await.unwrap();
+
+        // Hand-insert a second item on the same order tagged with source_row 12.
+        sqlx::query(
+            r#"INSERT INTO order_item (id, order_id, product_id, quantity, unit_price, source_row)
+               VALUES (?, ?, ?, ?, ?, ?)"#,
+        )
+        .bind(new_id()).bind(&out.order_id).bind(&p.id).bind(3_i64).bind(85_i64).bind(12_i64)
+        .execute(&pool).await.unwrap();
+
+        // Re-upsert row 11 with a different quantity — row 12's item must survive.
+        let mut tx = pool.begin().await.unwrap();
+        upsert_from_source(&mut tx, UpsertOrderInput {
+            customer_id: &c.id, channel: None, delivery_location: None, notes: None,
+            total_amount: 170, order_date: "2026-05-11",
+            source_tab: "Order_30", source_row: 11,
+            items: vec![UpsertOrderItemInput { product_id: &p.id, quantity: 2, unit_price: 85 }],
+        }).await.unwrap();
+        tx.commit().await.unwrap();
+
+        let items: Vec<(i64, Option<i64>)> = sqlx::query_as(
+            r#"SELECT quantity, source_row FROM order_item WHERE order_id = ? ORDER BY source_row"#,
+        ).bind(&out.order_id).fetch_all(&pool).await.unwrap();
+        assert_eq!(items, vec![(2, Some(11)), (3, Some(12))]);
     }
 
     #[tokio::test]
