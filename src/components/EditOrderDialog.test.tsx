@@ -43,6 +43,9 @@ const baseDetail: OrderDetail = {
     { productId: 'p1', nameTh: 'ก๋วยเตี๋ยว', quantity: 2, unitPrice: 100 },
     { productId: 'p2', nameTh: 'ชาเย็น', quantity: 1, unitPrice: 50 },
   ],
+  mergedIntoId: null,
+  mergedIntoOrderNumber: null,
+  mergedFromCount: 0,
 };
 
 const detailWithFreeItem: OrderDetail = {

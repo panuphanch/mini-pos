@@ -2,6 +2,7 @@ import { invoke } from '@tauri-apps/api/core';
 import type {
   AppConfig,
   CustomerLite,
+  MergeResult,
   OrderDetail,
   OrderEditPayload,
   OrderListRow,
@@ -53,4 +54,7 @@ export const ordersApi = {
     invoke<string>('print_order', { config, id }),
   update: (id: string, payload: OrderEditPayload) =>
     invoke<void>('update_order', { id, payload }),
+  delete: (id: string) => invoke<void>('delete_order', { id }),
+  merge: (orderIds: string[]) =>
+    invoke<MergeResult>('merge_orders', { orderIds }),
 };

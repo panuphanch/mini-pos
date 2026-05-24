@@ -23,6 +23,7 @@ pub struct OrderRow {
     pub print_count: i64,
     pub deleted_at: Option<String>,
     pub sync_locked: i64,
+    pub merged_into_id: Option<String>,
     pub created_at: String,
     pub updated_at: String,
 }
@@ -41,6 +42,7 @@ pub struct OrderItemRow {
     pub product_id: String,
     pub quantity: i64,
     pub unit_price: i64,
+    pub source_row: Option<i64>,
 }
 
 pub struct UpsertOrderInput<'a> {
@@ -137,21 +139,27 @@ pub async fn upsert_from_source(
     };
 
     // Locked rows keep their items as-is. Refresh them only when the row is
-    // either brand new or being updated from the sheet.
+    // either brand new or being updated from the sheet, AND only for items
+    // tagged with this sheet row. Other source_rows' items stay (the merge
+    // feature relies on this: a master order holds items from multiple
+    // source_rows).
     let is_locked: (i64,) = sqlx::query_as(
         r#"SELECT sync_locked FROM "order" WHERE id = ?"#,
     )
     .bind(&order_id).fetch_one(&mut **tx).await?;
     if is_locked.0 == 0 {
-        sqlx::query(r#"DELETE FROM order_item WHERE order_id = ?"#)
-            .bind(&order_id).execute(&mut **tx).await?;
+        sqlx::query(
+            r#"DELETE FROM order_item WHERE order_id = ? AND source_row = ?"#,
+        )
+        .bind(&order_id).bind(input.source_row).execute(&mut **tx).await?;
         for item in input.items {
             sqlx::query(
-                r#"INSERT INTO order_item (id, order_id, product_id, quantity, unit_price)
-                   VALUES (?, ?, ?, ?, ?)"#,
+                r#"INSERT INTO order_item
+                   (id, order_id, product_id, quantity, unit_price, source_row)
+                   VALUES (?, ?, ?, ?, ?, ?)"#,
             )
             .bind(new_id()).bind(&order_id).bind(item.product_id)
-            .bind(item.quantity).bind(item.unit_price)
+            .bind(item.quantity).bind(item.unit_price).bind(input.source_row)
             .execute(&mut **tx).await?;
         }
     }
@@ -172,12 +180,14 @@ pub async fn soft_delete_missing_rows(
     // silently match nothing in SQLite, so drop that predicate entirely.
     let sql = if keep_rows.is_empty() {
         r#"UPDATE "order" SET deleted_at = ?, updated_at = ?
-           WHERE source_tab = ? AND deleted_at IS NULL AND sync_locked = 0"#.to_string()
+           WHERE source_tab = ? AND deleted_at IS NULL AND sync_locked = 0
+             AND merged_into_id IS NULL"#.to_string()
     } else {
         let placeholders = keep_rows.iter().map(|_| "?").collect::<Vec<_>>().join(",");
         format!(
             r#"UPDATE "order" SET deleted_at = ?, updated_at = ?
                WHERE source_tab = ? AND deleted_at IS NULL AND sync_locked = 0
+                 AND merged_into_id IS NULL
                  AND source_row NOT IN ({})"#,
             placeholders
         )
@@ -196,8 +206,10 @@ pub async fn list_by_tab(
 ) -> Result<Vec<OrderRow>, sqlx::Error> {
     let mut sql = String::from(r#"SELECT * FROM "order" WHERE 1=1"#);
     if !include_deleted { sql.push_str(" AND deleted_at IS NULL"); }
+    // Merged-away rows are soft-deleted donors; show them only with include_deleted.
+    if !include_deleted { sql.push_str(" AND merged_into_id IS NULL"); }
     if tab.is_some() { sql.push_str(" AND source_tab = ?"); }
-    sql.push_str(" ORDER BY source_tab DESC, source_row ASC LIMIT ?");
+    sql.push_str(" ORDER BY source_tab DESC, source_row DESC LIMIT ?");
     let mut q = sqlx::query_as::<_, OrderRow>(&sql);
     if let Some(t) = tab { q = q.bind(t); }
     q = q.bind(limit);
@@ -289,6 +301,159 @@ pub async fn upsert_week_mapping(
     )
     .bind(tab).bind(week_start).execute(pool).await?;
     Ok(())
+}
+
+/// Soft-delete an order and lock it against re-sync.
+///
+/// Returns an error if the order doesn't exist or is already soft-deleted.
+/// The lock is what stops the next `apply_sync` from inserting the row again.
+/// A future task adds an additional guard against deleting a row that's been
+/// merged into another order.
+pub async fn delete_order(pool: &SqlitePool, order_id: &str) -> Result<(), sqlx::Error> {
+    let mut tx = pool.begin().await?;
+
+    let row: Option<(Option<String>,)> = sqlx::query_as(
+        r#"SELECT deleted_at FROM "order" WHERE id = ?"#,
+    )
+    .bind(order_id).fetch_optional(&mut *tx).await?;
+    let Some((deleted_at,)) = row else {
+        return Err(sqlx::Error::RowNotFound);
+    };
+    if deleted_at.is_some() {
+        return Err(sqlx::Error::Protocol(
+            format!("order {} is already deleted", order_id).into()
+        ));
+    }
+    let now = now_iso();
+    sqlx::query(
+        r#"UPDATE "order" SET deleted_at = ?, sync_locked = 1, updated_at = ?
+           WHERE id = ?"#,
+    )
+    .bind(&now).bind(&now).bind(order_id)
+    .execute(&mut *tx).await?;
+    tx.commit().await?;
+    Ok(())
+}
+
+#[derive(Debug)]
+pub struct MergeOutcome {
+    pub master_order_id: String,
+    pub master_order_number: String,
+    pub merged_count: usize,
+}
+
+/// Merge `order_ids` into one master order. The master is the input order
+/// with the smallest `source_row`. Donor orders are soft-deleted and their
+/// `merged_into_id` points at the master; their items move onto the master,
+/// tagged with the donor's `source_row`. Discount and delivery_fee are summed.
+///
+/// Constraints:
+///   * 2+ ids required.
+///   * All orders must share the same `source_tab`.
+///   * No order may already be merged-away (`merged_into_id IS NOT NULL`).
+///   * No order may be `sync_locked` (manual override; merge would replace it).
+///   * No order may be soft-deleted.
+pub async fn merge_orders(
+    pool: &SqlitePool,
+    order_ids: &[String],
+) -> Result<MergeOutcome, sqlx::Error> {
+    if order_ids.len() < 2 {
+        return Err(sqlx::Error::Protocol(
+            "merge requires at least two orders".into(),
+        ));
+    }
+    let mut rows: Vec<OrderRow> = Vec::with_capacity(order_ids.len());
+    for id in order_ids {
+        let row = sqlx::query_as::<_, OrderRow>(
+            r#"SELECT * FROM "order" WHERE id = ?"#,
+        ).bind(id).fetch_optional(pool).await?
+        .ok_or(sqlx::Error::RowNotFound)?;
+        rows.push(row);
+    }
+    // Constraint checks.
+    let tab = rows[0].source_tab.clone();
+    for r in &rows {
+        if r.source_tab.is_none() {
+            return Err(sqlx::Error::Protocol(
+                format!("order {} has no source_tab; cannot be merged", r.order_number).into()
+            ));
+        }
+        if r.source_tab != tab {
+            return Err(sqlx::Error::Protocol(
+                "all orders must share the same source_tab".into()
+            ));
+        }
+        if r.merged_into_id.is_some() {
+            return Err(sqlx::Error::Protocol(
+                format!("order {} is already merged into another", r.order_number).into()
+            ));
+        }
+        if r.sync_locked != 0 {
+            return Err(sqlx::Error::Protocol(
+                format!("order {} has manual edits; unlock before merging", r.order_number).into()
+            ));
+        }
+        if r.deleted_at.is_some() {
+            return Err(sqlx::Error::Protocol(
+                format!("order {} is removed", r.order_number).into()
+            ));
+        }
+    }
+
+    // Master = lowest source_row.
+    rows.sort_by_key(|r| r.source_row.unwrap_or(i64::MAX));
+    let master = rows.remove(0);
+    let donors = rows;
+    let now = now_iso();
+
+    let mut tx = pool.begin().await?;
+
+    // Move each donor's items onto the master, tagged with the donor's source_row.
+    let mut summed_discount = master.discount;
+    let mut summed_delivery = master.delivery_fee;
+    for d in &donors {
+        let donor_row = d.source_row.unwrap_or(0);
+        sqlx::query(
+            r#"UPDATE order_item
+               SET order_id = ?, source_row = ?
+               WHERE order_id = ?"#,
+        )
+        .bind(&master.id).bind(donor_row).bind(&d.id)
+        .execute(&mut *tx).await?;
+
+        summed_discount += d.discount;
+        summed_delivery += d.delivery_fee;
+
+        sqlx::query(
+            r#"UPDATE "order" SET
+                 merged_into_id = ?, deleted_at = ?, sync_locked = 0, updated_at = ?
+               WHERE id = ?"#,
+        )
+        .bind(&master.id).bind(&now).bind(&now).bind(&d.id)
+        .execute(&mut *tx).await?;
+    }
+
+    // Recompute master total = subtotal - discount + delivery_fee.
+    let subtotal: (i64,) = sqlx::query_as(
+        r#"SELECT COALESCE(SUM(quantity * unit_price), 0) FROM order_item WHERE order_id = ?"#,
+    ).bind(&master.id).fetch_one(&mut *tx).await?;
+    let new_total = (subtotal.0 - summed_discount + summed_delivery).max(0);
+
+    sqlx::query(
+        r#"UPDATE "order" SET
+             total_amount = ?, discount = ?, delivery_fee = ?, updated_at = ?
+           WHERE id = ?"#,
+    )
+    .bind(new_total).bind(summed_discount).bind(summed_delivery).bind(&now).bind(&master.id)
+    .execute(&mut *tx).await?;
+
+    tx.commit().await?;
+
+    Ok(MergeOutcome {
+        master_order_id: master.id,
+        master_order_number: master.order_number,
+        merged_count: donors.len(),
+    })
 }
 
 #[cfg(test)]
@@ -546,5 +711,368 @@ mod tests {
             "order_numbers should all be unique, got: {:?}", nums);
         assert_eq!(nums[0], "16-17/05/26-1");
         assert_eq!(nums[9], "16-17/05/26-10");
+    }
+
+    #[tokio::test]
+    async fn delete_order_soft_deletes_and_locks_against_resync() {
+        let pool = init_memory_pool().await.unwrap();
+        let (p, c) = seed_pc(&pool).await;
+
+        // Insert via the normal sync path so the row mirrors a real sheet row.
+        let mut tx = pool.begin().await.unwrap();
+        let out = upsert_from_source(&mut tx, UpsertOrderInput {
+            customer_id: &c.id, channel: None,
+            delivery_location: None, notes: None,
+            total_amount: 85, order_date: "2026-05-11",
+            source_tab: "Order_30", source_row: 11,
+            items: vec![UpsertOrderItemInput { product_id: &p.id, quantity: 1, unit_price: 85 }],
+        }).await.unwrap();
+        tx.commit().await.unwrap();
+
+        delete_order(&pool, &out.order_id).await.unwrap();
+
+        // Hidden by default
+        let alive = list_by_tab(&pool, Some("Order_30"), false, 100).await.unwrap();
+        assert_eq!(alive.len(), 0);
+        // Visible under include_deleted
+        let all = list_by_tab(&pool, Some("Order_30"), true, 100).await.unwrap();
+        assert_eq!(all.len(), 1);
+        assert!(all[0].deleted_at.is_some());
+        assert_eq!(all[0].sync_locked, 1);
+
+        // Re-syncing the same row must NOT resurrect it (sync_locked guards both
+        // upsert_from_source and soft_delete_missing_rows).
+        let mut tx = pool.begin().await.unwrap();
+        upsert_from_source(&mut tx, UpsertOrderInput {
+            customer_id: &c.id, channel: None,
+            delivery_location: None, notes: None,
+            total_amount: 85, order_date: "2026-05-11",
+            source_tab: "Order_30", source_row: 11,
+            items: vec![UpsertOrderItemInput { product_id: &p.id, quantity: 1, unit_price: 85 }],
+        }).await.unwrap();
+        tx.commit().await.unwrap();
+        let alive = list_by_tab(&pool, Some("Order_30"), false, 100).await.unwrap();
+        assert_eq!(alive.len(), 0, "deleted+locked row must stay hidden after re-sync");
+    }
+
+    #[tokio::test]
+    async fn delete_order_rejects_already_deleted() {
+        let pool = init_memory_pool().await.unwrap();
+        let (p, c) = seed_pc(&pool).await;
+        let mut tx = pool.begin().await.unwrap();
+        let out = upsert_from_source(&mut tx, UpsertOrderInput {
+            customer_id: &c.id, channel: None, delivery_location: None, notes: None,
+            total_amount: 85, order_date: "2026-05-11",
+            source_tab: "Order_30", source_row: 11,
+            items: vec![UpsertOrderItemInput { product_id: &p.id, quantity: 1, unit_price: 85 }],
+        }).await.unwrap();
+        tx.commit().await.unwrap();
+        delete_order(&pool, &out.order_id).await.unwrap();
+        let err = delete_order(&pool, &out.order_id).await.unwrap_err();
+        assert!(matches!(err, sqlx::Error::Protocol(_)),
+            "expected Protocol error, got {:?}", err);
+    }
+
+    #[tokio::test]
+    async fn upsert_only_refreshes_items_tagged_with_its_source_row() {
+        // Simulates the post-merge state by hand: one order owns items tagged with
+        // two different source_rows. Re-running upsert for source_row=11 must only
+        // touch items tagged 11 and leave items tagged 12 alone.
+        let pool = init_memory_pool().await.unwrap();
+        let (p, c) = seed_pc(&pool).await;
+
+        let mut tx = pool.begin().await.unwrap();
+        let out = upsert_from_source(&mut tx, UpsertOrderInput {
+            customer_id: &c.id, channel: None, delivery_location: None, notes: None,
+            total_amount: 85, order_date: "2026-05-11",
+            source_tab: "Order_30", source_row: 11,
+            items: vec![UpsertOrderItemInput { product_id: &p.id, quantity: 1, unit_price: 85 }],
+        }).await.unwrap();
+        tx.commit().await.unwrap();
+
+        // Hand-insert a second item on the same order tagged with source_row 12.
+        sqlx::query(
+            r#"INSERT INTO order_item (id, order_id, product_id, quantity, unit_price, source_row)
+               VALUES (?, ?, ?, ?, ?, ?)"#,
+        )
+        .bind(new_id()).bind(&out.order_id).bind(&p.id).bind(3_i64).bind(85_i64).bind(12_i64)
+        .execute(&pool).await.unwrap();
+
+        // Re-upsert row 11 with a different quantity — row 12's item must survive.
+        let mut tx = pool.begin().await.unwrap();
+        upsert_from_source(&mut tx, UpsertOrderInput {
+            customer_id: &c.id, channel: None, delivery_location: None, notes: None,
+            total_amount: 170, order_date: "2026-05-11",
+            source_tab: "Order_30", source_row: 11,
+            items: vec![UpsertOrderItemInput { product_id: &p.id, quantity: 2, unit_price: 85 }],
+        }).await.unwrap();
+        tx.commit().await.unwrap();
+
+        let items: Vec<(i64, Option<i64>)> = sqlx::query_as(
+            r#"SELECT quantity, source_row FROM order_item WHERE order_id = ? ORDER BY source_row"#,
+        ).bind(&out.order_id).fetch_all(&pool).await.unwrap();
+        assert_eq!(items, vec![(2, Some(11)), (3, Some(12))]);
+    }
+
+    #[tokio::test]
+    async fn migration_0003_adds_columns_and_backfill_query_runs() {
+        let pool = init_memory_pool().await.unwrap();
+        let (p, c) = seed_pc(&pool).await;
+        let mut tx = pool.begin().await.unwrap();
+        upsert_from_source(&mut tx, UpsertOrderInput {
+            customer_id: &c.id, channel: None, delivery_location: None, notes: None,
+            total_amount: 85, order_date: "2026-05-11",
+            source_tab: "Order_30", source_row: 11,
+            items: vec![UpsertOrderItemInput { product_id: &p.id, quantity: 1, unit_price: 85 }],
+        }).await.unwrap();
+        tx.commit().await.unwrap();
+
+        // The migration's backfill is retroactive — items inserted by code that
+        // doesn't yet set source_row will read NULL here. Run the same backfill
+        // query that the migration runs to prove the SQL is shaped right.
+        sqlx::query(
+            r#"UPDATE order_item
+                 SET source_row = (
+                   SELECT source_row FROM "order" WHERE "order".id = order_item.order_id
+                 )
+               WHERE source_row IS NULL"#,
+        ).execute(&pool).await.unwrap();
+
+        let row: (Option<i64>,) = sqlx::query_as(
+            r#"SELECT source_row FROM order_item LIMIT 1"#,
+        ).fetch_one(&pool).await.unwrap();
+        assert_eq!(row.0, Some(11), "backfill should populate source_row from parent order");
+
+        // Confirm the merged_into_id column exists on "order".
+        let _: (Option<String>,) = sqlx::query_as(
+            r#"SELECT merged_into_id FROM "order" LIMIT 1"#,
+        ).fetch_one(&pool).await.unwrap();
+    }
+
+    #[tokio::test]
+    async fn merge_two_orders_moves_items_sums_fees_marks_donor() {
+        let pool = init_memory_pool().await.unwrap();
+        let (p, c) = seed_pc(&pool).await;
+
+        let mut tx = pool.begin().await.unwrap();
+        let a = upsert_from_source(&mut tx, UpsertOrderInput {
+            customer_id: &c.id, channel: None, delivery_location: None, notes: None,
+            total_amount: 85, order_date: "2026-05-11",
+            source_tab: "Order_30", source_row: 4,
+            items: vec![UpsertOrderItemInput { product_id: &p.id, quantity: 1, unit_price: 85 }],
+        }).await.unwrap();
+        let b = upsert_from_source(&mut tx, UpsertOrderInput {
+            customer_id: &c.id, channel: None, delivery_location: None, notes: None,
+            total_amount: 170, order_date: "2026-05-11",
+            source_tab: "Order_30", source_row: 5,
+            items: vec![UpsertOrderItemInput { product_id: &p.id, quantity: 2, unit_price: 85 }],
+        }).await.unwrap();
+        tx.commit().await.unwrap();
+
+        // Give B a delivery fee so we can confirm the sum.
+        sqlx::query(
+            r#"UPDATE "order" SET delivery_fee = 40, total_amount = total_amount + 40 WHERE id = ?"#,
+        ).bind(&b.order_id).execute(&pool).await.unwrap();
+
+        let out = merge_orders(&pool, &[a.order_id.clone(), b.order_id.clone()]).await.unwrap();
+
+        // Master = lowest source_row (row 4)
+        assert_eq!(out.master_order_id, a.order_id);
+        assert_eq!(out.merged_count, 1);
+
+        let (master, items) = get_with_items(&pool, &a.order_id).await.unwrap().unwrap();
+        assert_eq!(master.delivery_fee, 40);
+        assert_eq!(master.discount, 0);
+        // 1×85 (row 4) + 2×85 (row 5) + 40 fee = 295
+        assert_eq!(master.total_amount, 295);
+        assert!(master.merged_into_id.is_none());
+        assert_eq!(master.sync_locked, 0, "merge must NOT lock the master");
+        assert_eq!(items.len(), 2);
+
+        let donor = sqlx::query_as::<_, OrderRow>(r#"SELECT * FROM "order" WHERE id = ?"#)
+            .bind(&b.order_id).fetch_one(&pool).await.unwrap();
+        assert_eq!(donor.merged_into_id.as_deref(), Some(a.order_id.as_str()));
+        assert!(donor.deleted_at.is_some());
+        assert_eq!(donor.sync_locked, 0);
+    }
+
+    #[tokio::test]
+    async fn merge_rejects_cross_tab() {
+        let pool = init_memory_pool().await.unwrap();
+        let (p, c) = seed_pc(&pool).await;
+        let mut tx = pool.begin().await.unwrap();
+        let a = upsert_from_source(&mut tx, UpsertOrderInput {
+            customer_id: &c.id, channel: None, delivery_location: None, notes: None,
+            total_amount: 85, order_date: "2026-05-11",
+            source_tab: "Order_30", source_row: 4,
+            items: vec![UpsertOrderItemInput { product_id: &p.id, quantity: 1, unit_price: 85 }],
+        }).await.unwrap();
+        let b = upsert_from_source(&mut tx, UpsertOrderInput {
+            customer_id: &c.id, channel: None, delivery_location: None, notes: None,
+            total_amount: 85, order_date: "2026-05-18",
+            source_tab: "Order_31", source_row: 4,
+            items: vec![UpsertOrderItemInput { product_id: &p.id, quantity: 1, unit_price: 85 }],
+        }).await.unwrap();
+        tx.commit().await.unwrap();
+        let err = merge_orders(&pool, &[a.order_id, b.order_id]).await.unwrap_err();
+        assert!(matches!(err, sqlx::Error::Protocol(_)),
+            "expected Protocol error, got {:?}", err);
+    }
+
+    #[tokio::test]
+    async fn merge_rejects_locked_donor() {
+        let pool = init_memory_pool().await.unwrap();
+        let (p, c) = seed_pc(&pool).await;
+        let mut tx = pool.begin().await.unwrap();
+        let a = upsert_from_source(&mut tx, UpsertOrderInput {
+            customer_id: &c.id, channel: None, delivery_location: None, notes: None,
+            total_amount: 85, order_date: "2026-05-11",
+            source_tab: "Order_30", source_row: 4,
+            items: vec![UpsertOrderItemInput { product_id: &p.id, quantity: 1, unit_price: 85 }],
+        }).await.unwrap();
+        let b = upsert_from_source(&mut tx, UpsertOrderInput {
+            customer_id: &c.id, channel: None, delivery_location: None, notes: None,
+            total_amount: 85, order_date: "2026-05-11",
+            source_tab: "Order_30", source_row: 5,
+            items: vec![UpsertOrderItemInput { product_id: &p.id, quantity: 1, unit_price: 85 }],
+        }).await.unwrap();
+        tx.commit().await.unwrap();
+        apply_order_edit(&pool, &b.order_id, &[
+            EditOrderItem { product_id: p.id.clone(), quantity: 1, unit_price: 85 },
+        ], 0, 0).await.unwrap();
+        let err = merge_orders(&pool, &[a.order_id, b.order_id]).await.unwrap_err();
+        assert!(matches!(err, sqlx::Error::Protocol(_)),
+            "expected Protocol error, got {:?}", err);
+    }
+
+    #[tokio::test]
+    async fn merge_into_existing_master_succeeds() {
+        // After a successful merge, the master order remains a valid merge target
+        // — merging another order into it stacks more donors onto the same master.
+        let pool = init_memory_pool().await.unwrap();
+        let (p, c) = seed_pc(&pool).await;
+        let mut tx = pool.begin().await.unwrap();
+        let a = upsert_from_source(&mut tx, UpsertOrderInput {
+            customer_id: &c.id, channel: None, delivery_location: None, notes: None,
+            total_amount: 85, order_date: "2026-05-11",
+            source_tab: "Order_30", source_row: 4,
+            items: vec![UpsertOrderItemInput { product_id: &p.id, quantity: 1, unit_price: 85 }],
+        }).await.unwrap();
+        let b = upsert_from_source(&mut tx, UpsertOrderInput {
+            customer_id: &c.id, channel: None, delivery_location: None, notes: None,
+            total_amount: 85, order_date: "2026-05-11",
+            source_tab: "Order_30", source_row: 5,
+            items: vec![UpsertOrderItemInput { product_id: &p.id, quantity: 1, unit_price: 85 }],
+        }).await.unwrap();
+        let cc = upsert_from_source(&mut tx, UpsertOrderInput {
+            customer_id: &c.id, channel: None, delivery_location: None, notes: None,
+            total_amount: 85, order_date: "2026-05-11",
+            source_tab: "Order_30", source_row: 6,
+            items: vec![UpsertOrderItemInput { product_id: &p.id, quantity: 1, unit_price: 85 }],
+        }).await.unwrap();
+        tx.commit().await.unwrap();
+
+        // First merge: a becomes master, b is merged away.
+        merge_orders(&pool, &[a.order_id.clone(), b.order_id]).await.unwrap();
+
+        // Second merge: a is still master (not merged-away), cc is a fresh donor — must succeed.
+        let res = merge_orders(&pool, &[a.order_id.clone(), cc.order_id]).await;
+        assert!(res.is_ok(), "merging into an existing master must work");
+
+        // a should still be master after the second merge.
+        let (master, _) = get_with_items(&pool, &a.order_id).await.unwrap().unwrap();
+        assert!(master.merged_into_id.is_none(), "a must still be master after second merge");
+    }
+
+    #[tokio::test]
+    async fn merge_rejects_already_merged() {
+        let pool = init_memory_pool().await.unwrap();
+        let (p, c) = seed_pc(&pool).await;
+        let mut tx = pool.begin().await.unwrap();
+        let a = upsert_from_source(&mut tx, UpsertOrderInput {
+            customer_id: &c.id, channel: None, delivery_location: None, notes: None,
+            total_amount: 85, order_date: "2026-05-11",
+            source_tab: "Order_30", source_row: 4,
+            items: vec![UpsertOrderItemInput { product_id: &p.id, quantity: 1, unit_price: 85 }],
+        }).await.unwrap();
+        let b = upsert_from_source(&mut tx, UpsertOrderInput {
+            customer_id: &c.id, channel: None, delivery_location: None, notes: None,
+            total_amount: 85, order_date: "2026-05-11",
+            source_tab: "Order_30", source_row: 5,
+            items: vec![UpsertOrderItemInput { product_id: &p.id, quantity: 1, unit_price: 85 }],
+        }).await.unwrap();
+        let cc = upsert_from_source(&mut tx, UpsertOrderInput {
+            customer_id: &c.id, channel: None, delivery_location: None, notes: None,
+            total_amount: 85, order_date: "2026-05-11",
+            source_tab: "Order_30", source_row: 6,
+            items: vec![UpsertOrderItemInput { product_id: &p.id, quantity: 1, unit_price: 85 }],
+        }).await.unwrap();
+        tx.commit().await.unwrap();
+
+        // First merge: a is master, b becomes merged-away.
+        merge_orders(&pool, &[a.order_id.clone(), b.order_id.clone()]).await.unwrap();
+
+        // Attempting to merge the already-merged donor (b) again must reject.
+        let err = merge_orders(&pool, &[b.order_id.clone(), cc.order_id.clone()])
+            .await.unwrap_err();
+        assert!(matches!(err, sqlx::Error::Protocol(_)),
+            "expected Protocol error, got {:?}", err);
+    }
+
+    #[tokio::test]
+    async fn list_hides_merged_away_rows_by_default() {
+        let pool = init_memory_pool().await.unwrap();
+        let (p, c) = seed_pc(&pool).await;
+        let mut tx = pool.begin().await.unwrap();
+        let a = upsert_from_source(&mut tx, UpsertOrderInput {
+            customer_id: &c.id, channel: None, delivery_location: None, notes: None,
+            total_amount: 85, order_date: "2026-05-11",
+            source_tab: "Order_30", source_row: 4,
+            items: vec![UpsertOrderItemInput { product_id: &p.id, quantity: 1, unit_price: 85 }],
+        }).await.unwrap();
+        let b = upsert_from_source(&mut tx, UpsertOrderInput {
+            customer_id: &c.id, channel: None, delivery_location: None, notes: None,
+            total_amount: 85, order_date: "2026-05-11",
+            source_tab: "Order_30", source_row: 5,
+            items: vec![UpsertOrderItemInput { product_id: &p.id, quantity: 1, unit_price: 85 }],
+        }).await.unwrap();
+        tx.commit().await.unwrap();
+        merge_orders(&pool, &[a.order_id.clone(), b.order_id.clone()]).await.unwrap();
+
+        let alive = list_by_tab(&pool, Some("Order_30"), false, 100).await.unwrap();
+        assert_eq!(alive.len(), 1);
+        assert_eq!(alive[0].id, a.order_id);
+
+        let all = list_by_tab(&pool, Some("Order_30"), true, 100).await.unwrap();
+        assert_eq!(all.len(), 2);
+    }
+
+    #[tokio::test]
+    async fn soft_delete_missing_rows_skips_merged_away() {
+        let pool = init_memory_pool().await.unwrap();
+        let (p, c) = seed_pc(&pool).await;
+        let mut tx = pool.begin().await.unwrap();
+        let a = upsert_from_source(&mut tx, UpsertOrderInput {
+            customer_id: &c.id, channel: None, delivery_location: None, notes: None,
+            total_amount: 85, order_date: "2026-05-11",
+            source_tab: "Order_30", source_row: 4,
+            items: vec![UpsertOrderItemInput { product_id: &p.id, quantity: 1, unit_price: 85 }],
+        }).await.unwrap();
+        let b = upsert_from_source(&mut tx, UpsertOrderInput {
+            customer_id: &c.id, channel: None, delivery_location: None, notes: None,
+            total_amount: 85, order_date: "2026-05-11",
+            source_tab: "Order_30", source_row: 5,
+            items: vec![UpsertOrderItemInput { product_id: &p.id, quantity: 1, unit_price: 85 }],
+        }).await.unwrap();
+        tx.commit().await.unwrap();
+        merge_orders(&pool, &[a.order_id.clone(), b.order_id.clone()]).await.unwrap();
+
+        // Sheet sync says "only row 4 still exists". soft_delete_missing_rows must
+        // ignore row 5's order shell because it's already merged-away — touching
+        // it would re-stamp deleted_at unnecessarily.
+        let mut tx = pool.begin().await.unwrap();
+        let n = soft_delete_missing_rows(&mut tx, "Order_30", &[4]).await.unwrap();
+        tx.commit().await.unwrap();
+        assert_eq!(n, 0);
     }
 }

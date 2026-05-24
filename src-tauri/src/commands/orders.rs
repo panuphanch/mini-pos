@@ -24,6 +24,9 @@ pub struct OrderListRow {
     pub notes: Option<String>,
     pub items_summary: String,
     pub sync_locked: bool,
+    pub merged_into_id: Option<String>,
+    pub merged_into_order_number: Option<String>,
+    pub merged_from_count: i64,
 }
 
 #[derive(Debug, Serialize)]
@@ -55,6 +58,9 @@ pub struct OrderDetail {
     pub print_count: i64,
     pub deleted_at: Option<String>,
     pub sync_locked: bool,
+    pub merged_into_id: Option<String>,
+    pub merged_into_order_number: Option<String>,
+    pub merged_from_count: i64,
     pub items: Vec<OrderDetailItem>,
 }
 
@@ -98,6 +104,15 @@ pub async fn list_orders(
         let items_summary = items.iter()
             .map(|(n, q)| format!("{}×{}", n, q))
             .collect::<Vec<_>>().join(" ");
+        let merged_from_count: (i64,) = sqlx::query_as(
+            r#"SELECT COUNT(*) FROM "order" WHERE merged_into_id = ?"#,
+        ).bind(&r.id).fetch_one(&state.db).await.map_err(|e| e.to_string())?;
+        let merged_into_order_number: Option<String> = if let Some(ref mid) = r.merged_into_id {
+            let row: Option<(String,)> = sqlx::query_as(
+                r#"SELECT order_number FROM "order" WHERE id = ?"#,
+            ).bind(mid).fetch_optional(&state.db).await.map_err(|e| e.to_string())?;
+            row.map(|t| t.0)
+        } else { None };
         out.push(OrderListRow {
             id: r.id, order_number: r.order_number, customer_name: cust,
             channel: r.channel, delivery_location: r.delivery_location,
@@ -107,6 +122,9 @@ pub async fn list_orders(
             deleted_at: r.deleted_at, order_date: r.order_date,
             notes: r.notes, items_summary,
             sync_locked: r.sync_locked != 0,
+            merged_into_id: r.merged_into_id,
+            merged_into_order_number,
+            merged_from_count: merged_from_count.0,
         });
     }
     Ok(out)
@@ -132,6 +150,15 @@ pub async fn get_order(
             quantity: it.quantity, unit_price: it.unit_price,
         });
     }
+    let merged_from_count: (i64,) = sqlx::query_as(
+        r#"SELECT COUNT(*) FROM "order" WHERE merged_into_id = ?"#,
+    ).bind(&r.id).fetch_one(&state.db).await.map_err(|e| e.to_string())?;
+    let merged_into_order_number: Option<String> = if let Some(ref mid) = r.merged_into_id {
+        let row: Option<(String,)> = sqlx::query_as(
+            r#"SELECT order_number FROM "order" WHERE id = ?"#,
+        ).bind(mid).fetch_optional(&state.db).await.map_err(|e| e.to_string())?;
+        row.map(|t| t.0)
+    } else { None };
     Ok(Some(OrderDetail {
         id: r.id, order_number: r.order_number, customer_name: cust,
         channel: r.channel, delivery_location: r.delivery_location,
@@ -140,6 +167,9 @@ pub async fn get_order(
         order_date: r.order_date, source_tab: r.source_tab, source_row: r.source_row,
         printed_at: r.printed_at, print_count: r.print_count,
         deleted_at: r.deleted_at, sync_locked: r.sync_locked != 0,
+        merged_into_id: r.merged_into_id,
+        merged_into_order_number,
+        merged_from_count: merged_from_count.0,
         items: detail_items,
     }))
 }
@@ -207,4 +237,33 @@ pub async fn print_order(
         .map_err(|e| format!("Print: {}", e))?;
     orders::mark_printed(&state.db, &id).await.map_err(|e| e.to_string())?;
     Ok("Printed".into())
+}
+
+#[tauri::command]
+pub async fn delete_order(
+    state: State<'_, AppState>,
+    id: String,
+) -> Result<(), String> {
+    orders::delete_order(&state.db, &id).await.map_err(|e| e.to_string())
+}
+
+#[derive(Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct MergeResult {
+    pub master_order_id: String,
+    pub master_order_number: String,
+    pub merged_count: usize,
+}
+
+#[tauri::command]
+pub async fn merge_orders(
+    state: State<'_, AppState>,
+    order_ids: Vec<String>,
+) -> Result<MergeResult, String> {
+    let out = orders::merge_orders(&state.db, &order_ids).await.map_err(|e| e.to_string())?;
+    Ok(MergeResult {
+        master_order_id: out.master_order_id,
+        master_order_number: out.master_order_number,
+        merged_count: out.merged_count,
+    })
 }

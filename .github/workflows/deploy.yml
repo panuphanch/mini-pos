@@ -51,6 +51,39 @@ jobs:
 
       - name: Build Tauri app
         run: npm run tauri build -- --bundles ${{ matrix.bundles }}
+        env:
+          # Ad-hoc sign the macOS .app so Gatekeeper stops reporting the
+          # bundle as "damaged" after download. First launch still needs
+          # right-click → Open once (no Developer ID). Ignored on Windows.
+          APPLE_SIGNING_IDENTITY: '-'
+
+      - name: Inject install README into DMG
+        if: matrix.os == 'macos-latest'
+        # Tauri's bundler doesn't have a hook for adding files next to the
+        # .app inside the DMG, so we post-process: convert the built DMG to
+        # read-write, mount it on a fixed mount point (so the volume's space
+        # in its name doesn't trip up shell parsing), drop the file in,
+        # then recompress.
+        run: |
+          set -euo pipefail
+          SRC_DMG=$(ls src-tauri/target/release/bundle/dmg/*.dmg | head -1)
+          RW_DMG="${SRC_DMG%.dmg}-rw.dmg"
+          MOUNT="/tmp/dmg-mount"
+
+          hdiutil convert "$SRC_DMG" -format UDRW -o "$RW_DMG"
+          # Add slack space so the new file fits — the freshly-built DMG is
+          # sized just-fit and a copy into a full volume errors out.
+          hdiutil resize -size 300m "$RW_DMG"
+
+          mkdir -p "$MOUNT"
+          hdiutil attach "$RW_DMG" -noverify -nobrowse -mountpoint "$MOUNT"
+          cp "installers/macos/READ ME FIRST.txt" "$MOUNT/"
+          hdiutil detach "$MOUNT"
+
+          # Repack as compressed read-only, then swap the original.
+          hdiutil convert "$RW_DMG" -format UDZO -o "${SRC_DMG}.new.dmg"
+          mv -f "${SRC_DMG}.new.dmg" "$SRC_DMG"
+          rm -f "$RW_DMG"
 
       - name: Upload bundle
         uses: actions/upload-artifact@v4
