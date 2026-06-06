@@ -223,11 +223,13 @@ interface ItemRowProps {
   onRemove: () => void;
 }
 
-function ItemRow({ item, onChange, onRemove }: ItemRowProps) {
+export function ItemRow({ item, onChange, onRemove }: ItemRowProps) {
   return (
     <div className="flex items-center gap-2 px-3 py-2.5">
       <div className="flex-1 min-w-0">
-        <div className="font-medium truncate">{item.nameTh}</div>
+        <div className="font-medium truncate" title={item.nameTh}>
+          {item.nameTh}
+        </div>
       </div>
       <div className="flex items-center gap-1.5">
         <Button

@@ -17,5 +17,9 @@ export default defineConfig({
     globals: true,
     setupFiles: ['./src/test/setup.ts'],
     css: false,
+    // Unit tests live under src/. Playwright specs under e2e/ run separately
+    // (jsdom can't do layout); keep vitest from picking them up.
+    include: ['src/**/*.test.{ts,tsx}'],
+    exclude: ['e2e/**', 'node_modules/**'],
   },
 });
