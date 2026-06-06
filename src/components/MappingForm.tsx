@@ -1,9 +1,10 @@
 import { useState } from 'react';
-import { AlertTriangle } from 'lucide-react';
-import { catalog } from '../lib/tauri';
+import { AlertTriangle, EyeOff, Undo2 } from 'lucide-react';
+import { catalog, sheets } from '../lib/tauri';
 import type {
   CustomerMappingChoice,
   MenuMappingChoice,
+  ParsedOrder,
   SyncMappings,
   SyncPreview,
 } from '../lib/types';
@@ -45,10 +46,47 @@ export default function MappingForm({ preview, onApply, onCancel, applying }: Ma
   const [customerRows, setCustomerRows] = useState<CustomerRow[]>(
     preview.unknownCustomers.map((c) => ({ alias: c.alias, selected: null, draft: null })),
   );
+  // Order rows the cashier has chosen to skip this sync (e.g. duplicates or
+  // garbage trailing rows). Persisted server-side; removed from the visible list.
+  const [ignoredRows, setIgnoredRows] = useState<ParsedOrder[]>([]);
+  const [showOrders, setShowOrders] = useState(false);
+
+  const activeOrders = preview.parsedOrders.filter(
+    (o) => !ignoredRows.some((r) => r.sourceRow === o.sourceRow),
+  );
 
   const menuResolved = menuRows.every((r) => r.selected !== null || r.draft !== null);
   const customerResolved = customerRows.every((r) => r.selected !== null || r.draft !== null);
   const canApply = menuResolved && customerResolved;
+
+  const ignoreMenu = async (alias: string) => {
+    await sheets.ignoreMenu(preview.tab, alias);
+    setMenuRows((rows) => rows.filter((r) => r.alias !== alias));
+  };
+
+  const ignoreRow = async (order: ParsedOrder) => {
+    await sheets.ignoreRow(preview.tab, order.sourceRow);
+    const remaining = activeOrders.filter((o) => o.sourceRow !== order.sourceRow);
+    setIgnoredRows((rows) => [...rows, order]);
+    // Drop customer cards whose alias no longer appears in any surviving row,
+    // so resolving them is no longer required to apply.
+    const stillReferenced = new Set(remaining.map((o) => o.customer));
+    setCustomerRows((rows) =>
+      rows.filter((r) => stillReferenced.has(r.alias)),
+    );
+  };
+
+  const restoreRow = async (order: ParsedOrder) => {
+    await sheets.ignoreRow(preview.tab, order.sourceRow, false);
+    setIgnoredRows((rows) => rows.filter((r) => r.sourceRow !== order.sourceRow));
+    // Re-surface the customer if it became unknown again and isn't already shown.
+    const known = preview.unknownCustomers.some((c) => c.alias === order.customer);
+    setCustomerRows((rows) =>
+      known && !rows.some((r) => r.alias === order.customer)
+        ? [...rows, { alias: order.customer, selected: null, draft: null }]
+        : rows,
+    );
+  };
 
   const buildMappings = (): SyncMappings => ({
     menu: menuRows.map((r): [string, MenuMappingChoice] => [
@@ -97,6 +135,7 @@ export default function MappingForm({ preview, onApply, onCancel, applying }: Ma
                   onChange={(updated) =>
                     setMenuRows((rows) => rows.map((r, idx) => (idx === i ? updated : r)))
                   }
+                  onIgnore={() => ignoreMenu(row.alias)}
                 />
               ))}
             </div>
@@ -117,6 +156,43 @@ export default function MappingForm({ preview, onApply, onCancel, applying }: Ma
                 />
               ))}
             </div>
+          </section>
+        )}
+
+        {preview.parsedOrders.length > 0 && (
+          <section className="space-y-3">
+            <button
+              type="button"
+              className="flex items-center gap-2 text-sm font-semibold text-muted-foreground hover:text-foreground"
+              onClick={() => setShowOrders((s) => !s)}
+            >
+              Order rows in this sync ({activeOrders.length})
+              {ignoredRows.length > 0 && (
+                <span className="text-xs font-normal text-muted-foreground">
+                  · {ignoredRows.length} ignored
+                </span>
+              )}
+              <span className="text-xs">{showOrders ? '▲' : '▼'}</span>
+            </button>
+            {showOrders && (
+              <div className="space-y-1.5">
+                {activeOrders.map((o) => (
+                  <OrderRowLine
+                    key={o.sourceRow}
+                    order={o}
+                    onIgnore={() => ignoreRow(o)}
+                  />
+                ))}
+                {ignoredRows.map((o) => (
+                  <OrderRowLine
+                    key={o.sourceRow}
+                    order={o}
+                    ignored
+                    onRestore={() => restoreRow(o)}
+                  />
+                ))}
+              </div>
+            )}
           </section>
         )}
 
@@ -149,7 +225,15 @@ export default function MappingForm({ preview, onApply, onCancel, applying }: Ma
   );
 }
 
-function MenuRowEditor({ row, onChange }: { row: MenuRow; onChange: (r: MenuRow) => void }) {
+function MenuRowEditor({
+  row,
+  onChange,
+  onIgnore,
+}: {
+  row: MenuRow;
+  onChange: (r: MenuRow) => void;
+  onIgnore: () => void;
+}) {
   return (
     <Card>
       <CardContent className="pt-5 space-y-3">
@@ -158,15 +242,27 @@ function MenuRowEditor({ row, onChange }: { row: MenuRow; onChange: (r: MenuRow)
             <span className="font-medium">{row.alias}</span>
             <span className="text-sm text-muted-foreground ml-2">฿{row.suggestedPrice}</span>
           </div>
-          {(row.selected || row.draft) && (
+          <div className="flex items-center gap-1">
+            {(row.selected || row.draft) && (
+              <Button
+                variant="ghost"
+                size="sm"
+                onClick={() => onChange({ ...row, selected: null, draft: null })}
+              >
+                Clear
+              </Button>
+            )}
             <Button
               variant="ghost"
               size="sm"
-              onClick={() => onChange({ ...row, selected: null, draft: null })}
+              className="text-muted-foreground"
+              onClick={onIgnore}
+              title="Skip this name — don't create a product or sync its quantities"
             >
-              Clear
+              <EyeOff className="h-4 w-4" />
+              Ignore
             </Button>
-          )}
+          </div>
         </div>
         {!row.draft && (
           <SearchPicker
@@ -228,6 +324,48 @@ function MenuRowEditor({ row, onChange }: { row: MenuRow; onChange: (r: MenuRow)
         )}
       </CardContent>
     </Card>
+  );
+}
+
+function OrderRowLine({
+  order,
+  ignored = false,
+  onIgnore,
+  onRestore,
+}: {
+  order: ParsedOrder;
+  ignored?: boolean;
+  onIgnore?: () => void;
+  onRestore?: () => void;
+}) {
+  const itemSummary = order.items.map((it) => `${it.menuName}×${it.quantity}`).join(', ');
+  return (
+    <div
+      className={`flex items-center gap-3 rounded-md border border-border px-3 py-2 text-sm ${
+        ignored ? 'opacity-50' : ''
+      }`}
+    >
+      <span className="w-10 shrink-0 tabular-nums text-xs text-muted-foreground">
+        #{order.sourceRow}
+      </span>
+      <div className="min-w-0 flex-1">
+        <span className="font-medium">{order.customer || '(no name)'}</span>
+        {itemSummary && (
+          <span className="ml-2 text-muted-foreground">{itemSummary}</span>
+        )}
+      </div>
+      {ignored ? (
+        <Button variant="ghost" size="sm" className="text-muted-foreground" onClick={onRestore}>
+          <Undo2 className="h-4 w-4" />
+          Restore
+        </Button>
+      ) : (
+        <Button variant="ghost" size="sm" className="text-muted-foreground" onClick={onIgnore}>
+          <EyeOff className="h-4 w-4" />
+          Ignore
+        </Button>
+      )}
+    </div>
   );
 }
 

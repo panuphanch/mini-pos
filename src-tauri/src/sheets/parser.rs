@@ -30,6 +30,13 @@ pub struct ParsedOrder {
 #[serde(rename_all = "camelCase")]
 pub struct ParsedTab {
     pub menu: Vec<MenuRow>,
+    /// Menu column headers of the order table, in left-to-right order
+    /// (delivery/note columns excluded). Index N in this list lines up with
+    /// index N in `menu` — the wife maintains the top summary table and the
+    /// order columns in the same order, so positional pairing gives each
+    /// column its price even when the header text is a shortened or
+    /// translated form of the summary name.
+    pub order_columns: Vec<String>,
     pub orders: Vec<ParsedOrder>,
     pub parse_errors: Vec<String>,
 }
@@ -135,7 +142,8 @@ pub fn parse_tab(vr: &ValueRange) -> Result<ParsedTab, ParseError> {
         });
     }
 
-    Ok(ParsedTab { menu, orders, parse_errors: errors })
+    let order_columns: Vec<String> = menu_cols.iter().map(|(_, n)| n.clone()).collect();
+    Ok(ParsedTab { menu, order_columns, orders, parse_errors: errors })
 }
 
 #[cfg(test)]
@@ -167,6 +175,10 @@ mod tests {
         let p = parse_tab(&vr).unwrap();
         assert_eq!(p.menu.len(), 4);
         assert_eq!(p.menu[1], MenuRow { menu_name: "เค้กช็อคฟัดจ์".into(), price: 85 });
+        // Order columns are captured in order and align 1:1 with the menu rows.
+        assert_eq!(p.order_columns, vec![
+            "เค้กโคตรเผือกมะพร้าว", "เค้กช็อคฟัดจ์", "ทาร์ตลูกตาล", "มัทฉะเลเยอร์",
+        ]);
         assert_eq!(p.orders.len(), 2);
         assert_eq!(p.orders[0].customer, "K.Parin");
         assert_eq!(p.orders[0].items.len(), 4);

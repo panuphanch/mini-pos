@@ -51,3 +51,36 @@ pub async fn apply_sync(
     engine::apply_sync(&state.db, client.as_ref(), &config.spreadsheet_id, &tab, mappings).await
         .map_err(|e| format!("Apply sync failed: {}", e))
 }
+
+// Per-tab ignore lists: let the cashier hide a bad menu column header or a
+// garbage/duplicate order row so it never syncs. `ignore = false` undoes it.
+
+#[tauri::command]
+pub async fn ignore_sync_menu(
+    state: State<'_, AppState>,
+    tab: String,
+    alias: String,
+    ignore: bool,
+) -> Result<(), String> {
+    let r = if ignore {
+        crate::db::sync_ignore::ignore_menu(&state.db, &tab, &alias).await
+    } else {
+        crate::db::sync_ignore::unignore_menu(&state.db, &tab, &alias).await
+    };
+    r.map_err(|e| format!("Ignore menu failed: {}", e))
+}
+
+#[tauri::command]
+pub async fn ignore_sync_row(
+    state: State<'_, AppState>,
+    tab: String,
+    source_row: i64,
+    ignore: bool,
+) -> Result<(), String> {
+    let r = if ignore {
+        crate::db::sync_ignore::ignore_row(&state.db, &tab, source_row).await
+    } else {
+        crate::db::sync_ignore::unignore_row(&state.db, &tab, source_row).await
+    };
+    r.map_err(|e| format!("Ignore row failed: {}", e))
+}

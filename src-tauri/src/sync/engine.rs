@@ -1,12 +1,27 @@
-use crate::db::{customers, orders, products};
+use crate::db::{customers, orders, products, sync_ignore};
 use crate::sheets::client::SheetsClient;
-use crate::sheets::parser::parse_tab;
+use crate::sheets::parser::{parse_tab, MenuRow};
 use crate::sheets::week::parse_tab_week_start;
 use crate::sync::types::*;
 use anyhow::{anyhow, Result};
 use chrono::Datelike;
 use sqlx::SqlitePool;
 use std::collections::HashMap;
+
+/// Pair each order-table column header with the top summary row at the same
+/// index to recover its price. The wife maintains both lists in the same order,
+/// so column N's price is summary row N's price — even when the header text is a
+/// shortened or translated form (e.g. header "แครอท" ↔ summary "Carrot 1P").
+fn positional_price_by_alias(order_columns: &[String], menu: &[MenuRow]) -> HashMap<String, i64> {
+    let mut map = HashMap::new();
+    for (i, col) in order_columns.iter().enumerate() {
+        // First occurrence wins; a duplicated header keeps its leftmost price.
+        if let Some(row) = menu.get(i) {
+            map.entry(col.clone()).or_insert(row.price);
+        }
+    }
+    map
+}
 
 pub async fn preview_sync(
     pool: &SqlitePool,
@@ -16,48 +31,48 @@ pub async fn preview_sync(
 ) -> Result<SyncPreview> {
     let range = format!("{}!A1:Z200", tab);
     let vr = sheets.get_values(spreadsheet_id, &range).await?;
-    let parsed = parse_tab(&vr).map_err(|e| anyhow!(e.to_string()))?;
+    let mut parsed = parse_tab(&vr).map_err(|e| anyhow!(e.to_string()))?;
 
     let week_start = parse_tab_week_start(tab, chrono::Utc::now().year())
         .map(|d| d.format("%Y-%m-%d").to_string())
         .unwrap_or_else(|| chrono::Utc::now().date_naive().format("%Y-%m-%d").to_string());
 
+    // Drop everything the cashier has chosen to ignore for this tab BEFORE we
+    // compute unknowns or counts, so an ignored row/name never resurfaces as
+    // noise and is never written. Ignored rows vanish entirely; ignored menu
+    // names are stripped from the items of the rows that survive.
+    let ignored_menu = sync_ignore::list_ignored_menu(pool, tab).await?;
+    let ignored_rows = sync_ignore::list_ignored_rows(pool, tab).await?;
+    parsed.orders.retain(|o| !ignored_rows.contains(&o.source_row));
+    if !ignored_menu.is_empty() {
+        for o in &mut parsed.orders {
+            o.items.retain(|it| !ignored_menu.contains(&it.menu_name));
+        }
+    }
+
     // Reconcile menu aliases.
     //
     // Two surfaces hold menu names in a tab:
-    //   1. Top menu table (column A) — has prices.
+    //   1. Top summary table (column A) — has prices.
     //   2. Order table column headers — what each order row's items actually reference.
     //
-    // In practice the wife sometimes shortens the column header (e.g. top menu says
-    // "เค้กโคตรเผือกมะพร้าว", header says "เค้กโคตรเผือก") because the column is narrow.
-    // We must surface BOTH so the user can map them — possibly to the same canonical
-    // product. The price suggestion for column-header-only names defaults to whatever
-    // we can find in the top menu by exact match, else 0.
-    let price_by_top_name: std::collections::HashMap<String, i64> =
-        parsed.menu.iter().map(|m| (m.menu_name.clone(), m.price)).collect();
-
-    let mut menu_alias_candidates: Vec<(String, i64)> = Vec::new();
-    let mut seen_menu_alias = std::collections::HashSet::new();
-    // Top menu first (so the suggested prices are predictable in the UI).
-    for m in &parsed.menu {
-        if seen_menu_alias.insert(m.menu_name.clone()) {
-            menu_alias_candidates.push((m.menu_name.clone(), m.price));
-        }
-    }
-    // Then column-header names from order items.
-    for o in &parsed.orders {
-        for it in &o.items {
-            if seen_menu_alias.insert(it.menu_name.clone()) {
-                let price = price_by_top_name.get(&it.menu_name).copied().unwrap_or(0);
-                menu_alias_candidates.push((it.menu_name.clone(), price));
-            }
-        }
-    }
+    // The wife maintains both in the SAME order, but the column header is often a
+    // shortened or translated form of the summary name (e.g. summary "Carrot 1P",
+    // header "แครอท"). The order rows only ever reference the column-header text, so
+    // that is the alias we resolve and map to a product. We pair each column header
+    // with the summary row at the same index to recover its price — this collapses
+    // each cake to a single entry instead of surfacing the full name (with price)
+    // and the short header (at ฿0) as two separate unknowns.
+    let price_by_alias = positional_price_by_alias(&parsed.order_columns, &parsed.menu);
 
     let mut unknown_menus: Vec<UnknownMenu> = Vec::new();
-    for (alias, price) in menu_alias_candidates {
-        if products::find_by_alias(pool, &alias).await?.is_none() {
-            unknown_menus.push(UnknownMenu { alias, suggested_price: price });
+    let mut seen_menu_alias = std::collections::HashSet::new();
+    for alias in &parsed.order_columns {
+        if !seen_menu_alias.insert(alias.clone()) { continue; }
+        if ignored_menu.contains(alias) { continue; }
+        if products::find_by_alias(pool, alias).await?.is_none() {
+            let price = price_by_alias.get(alias).copied().unwrap_or(0);
+            unknown_menus.push(UnknownMenu { alias: alias.clone(), suggested_price: price });
         }
     }
 
@@ -446,10 +461,12 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn top_menu_and_column_header_names_can_differ() {
-        // Real-world case from the screenshot: the wife shortens column headers
-        // because they're narrow. Top table = "FullName", header = "Short".
-        // Both must be surfaced as unknowns, and both must be mappable.
+    async fn column_header_is_priced_from_aligned_summary_row() {
+        // Real-world case from the screenshot: the wife shortens / translates the
+        // column header ("Short") relative to the top summary name ("FullName"),
+        // but keeps both lists in the same order. The order rows only reference
+        // the column header, so we surface ONE unknown ("Short") and price it
+        // from the summary row at the same index — no spurious ฿0 duplicate.
         let pool = init_memory_pool().await.unwrap();
         let vr = make_vr(vec![
             vec!["Menu", "", "Total", "Left", "Price"],
@@ -461,19 +478,13 @@ mod tests {
         let fake = fake_with("Order_21", vr);
         let preview = preview_sync(&pool, &fake, "ss", "Order_21").await.unwrap();
         let aliases: Vec<&str> = preview.unknown_menus.iter().map(|m| m.alias.as_str()).collect();
-        assert!(aliases.contains(&"FullName"), "preview should surface top-menu name");
-        assert!(aliases.contains(&"Short"), "preview should surface column-header name");
+        assert_eq!(aliases, vec!["Short"], "only the order-column header is surfaced, once");
+        assert_eq!(preview.unknown_menus[0].suggested_price, 100,
+            "price comes from the positionally-aligned summary row");
 
-        // Map both aliases to the SAME canonical product (the typical fix).
-        // First creates the product; second maps the short alias to it.
+        // Map the single alias to a new product.
         let mappings = SyncMappings {
             menu: vec![
-                ("FullName".into(), MenuMappingChoice::Create {
-                    name_th: "FullName".into(), name_en: None, selling_price: 100,
-                }),
-                // We don't yet have the product_id here, so use a sentinel that
-                // apply_sync's "already in DB" pass will overwrite via find_by_alias.
-                // Trick: use Create with same selling_price; we'll dedupe via alias.
                 ("Short".into(), MenuMappingChoice::Create {
                     name_th: "FullName".into(), name_en: None, selling_price: 100,
                 }),
@@ -483,18 +494,78 @@ mod tests {
         let res = apply_sync(&pool, &fake, "ss", "Order_21", mappings).await.unwrap();
         assert_eq!(res.rows_added, 1);
         let rows = crate::db::orders::list_by_tab(&pool, Some("Order_21"), false, 100).await.unwrap();
-        // Quantity 1, unit_price 100 → total 100, even though the column header
-        // "Short" has no matching top-menu price.
         assert_eq!(rows[0].total_amount, 100);
 
-        // Identical Create payloads should collapse into one product so future
-        // catalog edits stay consistent across both aliases.
         let product_count: i64 = sqlx::query_scalar(r#"SELECT COUNT(*) FROM product"#)
             .fetch_one(&pool).await.unwrap();
-        assert_eq!(product_count, 1, "two aliases with identical Create payloads must share one product");
-        let full = crate::db::products::find_by_alias(&pool, "FullName").await.unwrap().unwrap();
-        let short = crate::db::products::find_by_alias(&pool, "Short").await.unwrap().unwrap();
-        assert_eq!(full.id, short.id);
+        assert_eq!(product_count, 1, "one column header → one product");
+    }
+
+    fn screenshot_csv_shape() -> ValueRange {
+        // Mirrors ~/Downloads/GrannySaidso Order - 6-7_06_26.csv: summary table
+        // with full/English names + prices, then an order table whose column
+        // headers are shortened/Thai forms in the SAME order.
+        make_vr(vec![
+            vec!["Menu", "", "Total", "", "Price"],
+            vec!["เค้กพายคาราเมลโคตรถั่ว", "", "10", "0", "145"],
+            vec!["London Choc Caramel Moose", "", "16", "0", "165"],
+            vec!["Matcha Layers", "", "10", "0", "165"],
+            vec!["เค้กเผือกลอดช่อง", "", "10", "0", "129"],
+            vec!["Carrot 1P", "", "6", "0", "85"],
+            vec![""],
+            vec!["ช่องทาง", "ลูกค้า", "พายคาราเมลโคตรถั่ว", "London Choc",
+                 "Matcha Layers", "เค้กเผือกลอดช่อง", "แครอท", "สถานที่ส่ง", "Note"],
+            vec!["DM", "N'อ้อนใจ", "2", "1", "", "", "", "Chawyn", ""],
+            vec!["Page", "K.PPor", "", "1", "", "", "1", "บ้าน", ""],
+        ])
+    }
+
+    #[tokio::test]
+    async fn screenshot_shape_surfaces_each_cake_once_with_price() {
+        // Regression for the reported bug: each cake showed twice — full name w/
+        // price and short header at ฿0. Now each order column appears once,
+        // priced from its aligned summary row, and no ฿0 duplicate exists.
+        let pool = init_memory_pool().await.unwrap();
+        let fake = fake_with("Order_33", screenshot_csv_shape());
+        let preview = preview_sync(&pool, &fake, "ss", "Order_33").await.unwrap();
+
+        let priced: Vec<(String, i64)> = preview.unknown_menus.iter()
+            .map(|m| (m.alias.clone(), m.suggested_price)).collect();
+        // Only the order-column headers, each exactly once, none at ฿0.
+        assert!(priced.contains(&("London Choc".to_string(), 165)));
+        assert!(priced.contains(&("แครอท".to_string(), 85)));
+        assert!(priced.contains(&("พายคาราเมลโคตรถั่ว".to_string(), 145)));
+        assert!(!priced.iter().any(|(_, p)| *p == 0), "no ฿0 duplicate entries: {:?}", priced);
+        // No full summary names leak in as separate unknowns.
+        assert!(!priced.iter().any(|(a, _)| a == "London Choc Caramel Moose"));
+        assert!(!priced.iter().any(|(a, _)| a == "Carrot 1P"));
+        // Five columns are referenced across the two rows → at most 5 unknowns.
+        assert!(preview.unknown_menus.len() <= 5);
+    }
+
+    #[tokio::test]
+    async fn ignored_menu_and_rows_are_excluded_from_sync() {
+        let pool = init_memory_pool().await.unwrap();
+        let fake = fake_with("Order_33", screenshot_csv_shape());
+
+        // Ignore one bad column name and one order row.
+        sync_ignore::ignore_menu(&pool, "Order_33", "แครอท").await.unwrap();
+        sync_ignore::ignore_row(&pool, "Order_33", 10).await.unwrap(); // K.PPor row
+
+        let preview = preview_sync(&pool, &fake, "ss", "Order_33").await.unwrap();
+        assert!(!preview.unknown_menus.iter().any(|m| m.alias == "แครอท"),
+            "ignored menu name must not surface");
+        assert!(!preview.parsed_orders.iter().any(|o| o.source_row == 10),
+            "ignored row must not be parsed");
+        assert!(!preview.unknown_customers.iter().any(|c| c.alias == "K.PPor"),
+            "customer from an ignored row must not surface");
+
+        // Un-ignore restores them.
+        sync_ignore::unignore_menu(&pool, "Order_33", "แครอท").await.unwrap();
+        sync_ignore::unignore_row(&pool, "Order_33", 10).await.unwrap();
+        let preview2 = preview_sync(&pool, &fake, "ss", "Order_33").await.unwrap();
+        assert!(preview2.unknown_menus.iter().any(|m| m.alias == "แครอท"));
+        assert!(preview2.parsed_orders.iter().any(|o| o.source_row == 10));
     }
 
     #[tokio::test]

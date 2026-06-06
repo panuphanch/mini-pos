@@ -96,10 +96,16 @@ pub async fn list_orders(
         let cust = customers::get_by_id(&state.db, &r.customer_id).await
             .map_err(|e| e.to_string())?
             .map(|c| c.name).unwrap_or_else(|| "(unknown)".into());
+        // Collapse identical products (same product + unit price) into one
+        // entry with summed quantity. A merged order keeps one order_item row
+        // per source sheet row, so the same product can appear several times;
+        // the summary should read "Carrot Cake×4", not four "Carrot Cake×1".
         let items = sqlx::query_as::<_, (String, i64)>(
-            r#"SELECT p.name_th, oi.quantity FROM order_item oi
+            r#"SELECT p.name_th, SUM(oi.quantity) AS qty FROM order_item oi
                JOIN product p ON p.id = oi.product_id
-               WHERE oi.order_id = ? ORDER BY oi.id"#,
+               WHERE oi.order_id = ?
+               GROUP BY oi.product_id, oi.unit_price
+               ORDER BY MIN(oi.id)"#,
         ).bind(&r.id).fetch_all(&state.db).await.map_err(|e| e.to_string())?;
         let items_summary = items.iter()
             .map(|(n, q)| format!("{}×{}", n, q))
@@ -203,8 +209,14 @@ pub async fn print_order(
         .map_err(|e| e.to_string())?
         .map(|c| c.name).unwrap_or_else(|| "(unknown)".into());
 
-    let mut receipt_items = Vec::with_capacity(items.len());
-    for it in items {
+    // Collapse identical products (same product + unit price) into one receipt
+    // line with summed quantity. A merged order keeps one order_item row per
+    // source sheet row, so the same product can appear several times; the
+    // receipt should print "Carrot Cake×4", not four "Carrot Cake×1". Raw rows
+    // stay untouched in the DB for sync/edit.
+    let aggregated = orders::aggregate_items(&items);
+    let mut receipt_items = Vec::with_capacity(aggregated.len());
+    for it in aggregated {
         let p = products::get_by_id(&state.db, &it.product_id).await
             .map_err(|e| e.to_string())?;
         let name = p.map(|p| p.name_th).unwrap_or_else(|| "(deleted)".into());
