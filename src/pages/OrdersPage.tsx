@@ -17,6 +17,7 @@ import { Checkbox } from '../components/ui/checkbox';
 import { Label } from '../components/ui/label';
 import { Badge } from '../components/ui/badge';
 import EditOrderDialog from '../components/EditOrderDialog';
+import { aggregateOrderItems } from '../lib/aggregateOrderItems';
 import {
   Select,
   SelectContent,
@@ -533,7 +534,8 @@ function OrderRow({
 }
 
 function DetailPanel({ detail }: { detail: OrderDetail }) {
-  const itemsSubtotal = detail.items.reduce((s, it) => s + it.unitPrice * it.quantity, 0);
+  const items = aggregateOrderItems(detail.items);
+  const itemsSubtotal = items.reduce((s, it) => s + it.unitPrice * it.quantity, 0);
   return (
     <div className="max-w-3xl space-y-4">
       <table className="w-full text-sm">
@@ -546,8 +548,8 @@ function DetailPanel({ detail }: { detail: OrderDetail }) {
           </tr>
         </thead>
         <tbody>
-          {detail.items.map((it) => (
-            <tr key={it.productId} className="border-t border-border">
+          {items.map((it) => (
+            <tr key={`${it.productId}-${it.unitPrice}`} className="border-t border-border">
               <td className="py-1.5">{it.nameTh}</td>
               <td className="py-1.5 text-right tabular-nums">{it.quantity}</td>
               <td className="py-1.5 text-right tabular-nums">฿{it.unitPrice}</td>

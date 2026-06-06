@@ -228,6 +228,46 @@ pub async fn get_with_items(
     Ok(Some((order, items)))
 }
 
+/// One product line collapsed for display/printing: a product at a given unit
+/// price with quantities summed across the underlying `order_item` rows.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct AggregatedItem {
+    pub product_id: String,
+    pub unit_price: i64,
+    pub quantity: i64,
+}
+
+/// Collapse line items for *display and printing*. A merged order keeps one
+/// `order_item` row per source sheet row (so sync can refresh each row
+/// independently), which means the same product can appear several times. For
+/// the receipt and detail views we want one line per product at a given price,
+/// with quantities summed.
+///
+/// Grouping key is `(product_id, unit_price)`: identical products at the same
+/// price collapse into one line; genuinely different products — or the same
+/// product sold at two different prices — stay on separate lines. First-seen
+/// order is preserved.
+///
+/// This is display-only: it must NOT be used to rewrite stored rows, or sync
+/// provenance (`source_row`) would be lost.
+pub fn aggregate_items(items: &[OrderItemRow]) -> Vec<AggregatedItem> {
+    let mut out: Vec<AggregatedItem> = Vec::new();
+    for it in items {
+        match out
+            .iter_mut()
+            .find(|a| a.product_id == it.product_id && a.unit_price == it.unit_price)
+        {
+            Some(existing) => existing.quantity += it.quantity,
+            None => out.push(AggregatedItem {
+                product_id: it.product_id.clone(),
+                unit_price: it.unit_price,
+                quantity: it.quantity,
+            }),
+        }
+    }
+    out
+}
+
 /// Apply a manual edit to an order. Replaces the line items, recomputes the
 /// total as `subtotal - discount + delivery_fee`, and flips `sync_locked = 1`
 /// so future syncs from the sheet leave this row alone.
@@ -465,6 +505,55 @@ mod tests {
         let p = products::create(pool, "เค้กช็อคฟัดจ์", Some("Choco Fudge"), 85).await.unwrap();
         let c = customers::create(pool, "K.Parin").await.unwrap();
         (p, c)
+    }
+
+    fn item_row(product_id: &str, quantity: i64, unit_price: i64) -> OrderItemRow {
+        OrderItemRow {
+            id: format!("oi-{product_id}-{unit_price}-{quantity}"),
+            order_id: "o1".into(),
+            product_id: product_id.into(),
+            quantity,
+            unit_price,
+            source_row: None,
+        }
+    }
+
+    #[test]
+    fn aggregate_items_collapses_merged_order_into_one_line_per_product() {
+        // P'Gig week 30-31/05/26: a merged ×4 order spread across 5 rows —
+        // 4 Carrot Cake Cranberry (Loaf) @260 and 1 Carrot Cake Original @230.
+        let rows = vec![
+            item_row("cranberry", 1, 260),
+            item_row("cranberry", 1, 260),
+            item_row("cranberry", 1, 260),
+            item_row("original", 1, 230),
+            item_row("cranberry", 1, 260),
+        ];
+        let out = aggregate_items(&rows);
+        assert_eq!(
+            out,
+            vec![
+                AggregatedItem { product_id: "cranberry".into(), unit_price: 260, quantity: 4 },
+                AggregatedItem { product_id: "original".into(), unit_price: 230, quantity: 1 },
+            ]
+        );
+    }
+
+    #[test]
+    fn aggregate_items_keeps_same_product_separate_when_price_differs() {
+        let rows = vec![item_row("cranberry", 2, 260), item_row("cranberry", 1, 240)];
+        let out = aggregate_items(&rows);
+        assert_eq!(out.len(), 2);
+        assert_eq!(out[0], AggregatedItem { product_id: "cranberry".into(), unit_price: 260, quantity: 2 });
+        assert_eq!(out[1], AggregatedItem { product_id: "cranberry".into(), unit_price: 240, quantity: 1 });
+    }
+
+    #[test]
+    fn aggregate_items_preserves_first_seen_order() {
+        let rows = vec![item_row("b", 1, 10), item_row("a", 1, 20), item_row("b", 2, 10)];
+        let out = aggregate_items(&rows);
+        assert_eq!(out.iter().map(|a| a.product_id.as_str()).collect::<Vec<_>>(), vec!["b", "a"]);
+        assert_eq!(out[0].quantity, 3);
     }
 
     #[tokio::test]
