@@ -33,6 +33,10 @@ export const sheets = {
     invoke<SyncPreview>('sync_week', { config, tab }),
   applySync: (config: AppConfig, tab: string, mappings: SyncMappings) =>
     invoke<SyncResult>('apply_sync', { config, tab, mappings }),
+  ignoreMenu: (tab: string, alias: string, ignore = true) =>
+    invoke<void>('ignore_sync_menu', { tab, alias, ignore }),
+  ignoreRow: (tab: string, sourceRow: number, ignore = true) =>
+    invoke<void>('ignore_sync_row', { tab, sourceRow, ignore }),
 };
 
 export const catalog = {

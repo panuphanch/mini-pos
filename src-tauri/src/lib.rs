@@ -36,6 +36,8 @@ pub fn run() {
             commands::sync::test_sheets_connection,
             commands::sync::sync_week,
             commands::sync::apply_sync,
+            commands::sync::ignore_sync_menu,
+            commands::sync::ignore_sync_row,
             commands::catalog::search_products,
             commands::catalog::search_customers,
             commands::orders::list_orders,
