@@ -66,13 +66,35 @@ pub async fn preview_sync(
     let price_by_alias = positional_price_by_alias(&parsed.order_columns, &parsed.menu);
 
     let mut unknown_menus: Vec<UnknownMenu> = Vec::new();
+    let mut drifted_menus: Vec<DriftedMenu> = Vec::new();
     let mut seen_menu_alias = std::collections::HashSet::new();
     for alias in &parsed.order_columns {
         if !seen_menu_alias.insert(alias.clone()) { continue; }
         if ignored_menu.contains(alias) { continue; }
-        if products::find_by_alias(pool, alias).await?.is_none() {
-            let price = price_by_alias.get(alias).copied().unwrap_or(0);
-            unknown_menus.push(UnknownMenu { alias: alias.clone(), suggested_price: price });
+        match products::find_by_alias(pool, alias).await? {
+            None => {
+                let price = price_by_alias.get(alias).copied().unwrap_or(0);
+                unknown_menus.push(UnknownMenu { alias: alias.clone(), suggested_price: price });
+            }
+            Some(product) => {
+                // Known alias: the price on the sheet this week is the only
+                // signal that the wife has repointed this header at a repriced
+                // or different cake. If it disagrees with the bound product's
+                // price, surface it instead of silently applying the stale one.
+                // A ฿0 (missing) positional price carries no signal — skip it.
+                if let Some(&sheet_price) = price_by_alias.get(alias) {
+                    if sheet_price > 0 && sheet_price != product.selling_price {
+                        drifted_menus.push(DriftedMenu {
+                            alias: alias.clone(),
+                            product_id: product.id.clone(),
+                            product_name_th: product.name_th.clone(),
+                            product_name_en: product.name_en.clone(),
+                            current_price: product.selling_price,
+                            sheet_price,
+                        });
+                    }
+                }
+            }
         }
     }
 
@@ -108,6 +130,7 @@ pub async fn preview_sync(
         tab: tab.to_string(),
         week_start_date: week_start,
         unknown_menus,
+        drifted_menus,
         unknown_customers,
         parsed_orders: parsed.orders,
         will_insert, will_update, will_soft_delete,
@@ -132,9 +155,19 @@ pub async fn apply_sync(
     // we want one product, not two — otherwise future catalog edits diverge.
     let mut menu_alias_to_product: HashMap<String, String> = HashMap::new();
     let mut created_menu_by_payload: HashMap<(String, Option<String>, i64), String> = HashMap::new();
+    // Aliases the cashier explicitly resolved in this request. A drifted alias
+    // already resolves via find_by_alias, so the "already in DB" backfill below
+    // would satisfy a contains_key gate without any human decision — we gate on
+    // this set instead to force an explicit choice for every drift.
+    let explicitly_mapped: std::collections::HashSet<String> =
+        mappings.menu.iter().map(|(a, _)| a.clone()).collect();
     for (alias, choice) in mappings.menu {
         let pid = match choice {
             MenuMappingChoice::Existing { product_id } => product_id,
+            MenuMappingChoice::UpdatePrice { product_id, selling_price } => {
+                products::update_price(pool, &product_id, selling_price).await?;
+                product_id
+            }
             MenuMappingChoice::Create { name_th, name_en, selling_price } => {
                 let key = (name_th.clone(), name_en.clone(), selling_price);
                 if let Some(existing) = created_menu_by_payload.get(&key) {
@@ -186,6 +219,14 @@ pub async fn apply_sync(
     for um in &preview.unknown_menus {
         if !menu_alias_to_product.contains_key(&um.alias) {
             return Err(anyhow!("Menu alias unresolved: {}", um.alias));
+        }
+    }
+    for dm in &preview.drifted_menus {
+        if !explicitly_mapped.contains(&dm.alias) {
+            return Err(anyhow!(
+                "Menu price drift unresolved: {} (sheet ฿{} vs ฿{})",
+                dm.alias, dm.sheet_price, dm.current_price
+            ));
         }
     }
     for uc in &preview.unknown_customers {
@@ -779,5 +820,76 @@ mod tests {
         assert_eq!(alive.len(), 1);
         let printed = crate::db::orders::get_with_items(&pool, &cust1_id).await.unwrap().unwrap().0;
         assert!(printed.printed_at.is_some());
+    }
+
+    #[tokio::test]
+    async fn reused_header_price_drift_is_surfaced_and_blocks_until_resolved() {
+        // Regression for the silent overcharge: the wife reuses a short column
+        // header across weeks. When she repoints it at a repriced cake, the
+        // global exact alias used to apply the OLD price with no unknown
+        // surfaced. Now the price mismatch surfaces as a drift that blocks
+        // apply until the cashier resolves it.
+        let pool = init_memory_pool().await.unwrap();
+
+        // Week A: header "Taro" priced 129, mapped to a new product.
+        let week_a = make_vr(vec![
+            vec!["Menu", "", "Total", "Left", "Price"],
+            vec!["Taro", "", "10", "5", "129"],
+            vec![""],
+            vec!["ช่องทาง", "ลูกค้า", "Taro", "สถานที่ส่ง", "Note"],
+            vec!["Page", "C1", "1", "Home", ""],
+        ]);
+        let fake_a = fake_with("Order_40", week_a);
+        let pa = preview_sync(&pool, &fake_a, "ss", "Order_40").await.unwrap();
+        assert_eq!(pa.unknown_menus.len(), 1);
+        assert!(pa.drifted_menus.is_empty(), "nothing bound yet → no drift");
+        apply_sync(&pool, &fake_a, "ss", "Order_40", SyncMappings {
+            menu: vec![("Taro".into(), MenuMappingChoice::Create {
+                name_th: "เค้กโคตรเผือกมะพร้าวอ่อน".into(), name_en: None, selling_price: 129 })],
+            customer: vec![("C1".into(), CustomerMappingChoice::Create { name: "C1".into() })],
+        }).await.unwrap();
+        let product_id = products::find_by_alias(&pool, "Taro").await.unwrap().unwrap().id;
+
+        // Week B (different tab): SAME header "Taro", but the menu changed — 115.
+        let week_b = make_vr(vec![
+            vec!["Menu", "", "Total", "Left", "Price"],
+            vec!["Taro", "", "10", "5", "115"],
+            vec![""],
+            vec!["ช่องทาง", "ลูกค้า", "Taro", "สถานที่ส่ง", "Note"],
+            vec!["Page", "C1", "2", "Home", ""],
+        ]);
+        let fake_b = fake_with("Order_41", week_b);
+        let pb = preview_sync(&pool, &fake_b, "ss", "Order_41").await.unwrap();
+
+        // The reused header resolves (not unknown) but the price mismatch drifts.
+        assert!(pb.unknown_menus.is_empty(), "known alias must not surface as unknown");
+        assert_eq!(pb.drifted_menus.len(), 1, "price mismatch must surface as drift");
+        let d = &pb.drifted_menus[0];
+        assert_eq!(d.alias, "Taro");
+        assert_eq!(d.current_price, 129);
+        assert_eq!(d.sheet_price, 115);
+        assert_eq!(d.product_id, product_id);
+
+        // Applying without resolving the drift is blocked.
+        let blocked = apply_sync(&pool, &fake_b, "ss", "Order_41",
+            SyncMappings { menu: vec![], customer: vec![] }).await;
+        assert!(blocked.is_err(), "unresolved drift must block apply");
+
+        // Resolve via UpdatePrice → product adopts 115 and the order is priced at 115.
+        apply_sync(&pool, &fake_b, "ss", "Order_41", SyncMappings {
+            menu: vec![("Taro".into(), MenuMappingChoice::UpdatePrice {
+                product_id: product_id.clone(), selling_price: 115 })],
+            customer: vec![],
+        }).await.unwrap();
+
+        let updated = products::get_by_id(&pool, &product_id).await.unwrap().unwrap();
+        assert_eq!(updated.selling_price, 115, "product price updated to sheet price");
+        let rows = crate::db::orders::list_by_tab(&pool, Some("Order_41"), false, 100).await.unwrap();
+        assert_eq!(rows.len(), 1);
+        assert_eq!(rows[0].total_amount, 230, "2 × ฿115");
+
+        // A second preview now sees no drift (prices agree).
+        let pb2 = preview_sync(&pool, &fake_b, "ss", "Order_41").await.unwrap();
+        assert!(pb2.drifted_menus.is_empty(), "drift clears once prices agree");
     }
 }

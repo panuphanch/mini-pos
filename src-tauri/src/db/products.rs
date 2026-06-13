@@ -70,6 +70,13 @@ pub async fn find_by_alias(pool: &SqlitePool, alias: &str) -> Result<Option<Prod
     .bind(alias).fetch_optional(pool).await
 }
 
+pub async fn update_price(pool: &SqlitePool, id: &str, selling_price: i64) -> Result<(), sqlx::Error> {
+    sqlx::query("UPDATE product SET selling_price = ?, updated_at = ? WHERE id = ?")
+        .bind(selling_price).bind(now_iso()).bind(id)
+        .execute(pool).await?;
+    Ok(())
+}
+
 pub async fn upsert_alias(pool: &SqlitePool, alias: &str, product_id: &str) -> Result<(), sqlx::Error> {
     sqlx::query(
         r#"INSERT INTO product_alias (id, alias, product_id, created_at)

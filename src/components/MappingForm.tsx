@@ -1,4 +1,4 @@
-import { useState } from 'react';
+import { useState, type ReactNode } from 'react';
 import { AlertTriangle, EyeOff, Undo2 } from 'lucide-react';
 import { catalog, sheets } from '../lib/tauri';
 import type {
@@ -8,6 +8,7 @@ import type {
   SyncMappings,
   SyncPreview,
 } from '../lib/types';
+import { cn } from '../lib/cn';
 import SearchPicker, { type SearchResult } from './SearchPicker';
 import { Button } from './ui/button';
 import { Input } from './ui/input';
@@ -34,6 +35,43 @@ type CustomerRow = {
   draft: { name: string } | null;
 };
 
+type DriftRow = {
+  alias: string;
+  productId: string;
+  productNameTh: string;
+  productNameEn: string | null;
+  currentPrice: number;
+  sheetPrice: number;
+  action: 'keep' | 'update' | 'remap' | null;
+  remapSelected: SearchResult | null;
+  remapDraft: { nameTh: string; nameEn: string; sellingPrice: number } | null;
+};
+
+const driftResolved = (r: DriftRow): boolean =>
+  r.action === 'keep' ||
+  r.action === 'update' ||
+  (r.action === 'remap' && (r.remapSelected !== null || r.remapDraft !== null));
+
+const driftChoice = (r: DriftRow): MenuMappingChoice => {
+  if (r.action === 'update') {
+    return { updatePrice: { productId: r.productId, sellingPrice: r.sheetPrice } };
+  }
+  if (r.action === 'remap' && r.remapSelected) {
+    return { existing: { productId: r.remapSelected.id } };
+  }
+  if (r.action === 'remap' && r.remapDraft) {
+    return {
+      create: {
+        nameTh: r.remapDraft.nameTh,
+        nameEn: r.remapDraft.nameEn.trim() ? r.remapDraft.nameEn : null,
+        sellingPrice: r.remapDraft.sellingPrice,
+      },
+    };
+  }
+  // 'keep' — alias stays bound to the same product.
+  return { existing: { productId: r.productId } };
+};
+
 export default function MappingForm({ preview, onApply, onCancel, applying }: MappingFormProps) {
   const [menuRows, setMenuRows] = useState<MenuRow[]>(
     preview.unknownMenus.map((m) => ({
@@ -46,6 +84,19 @@ export default function MappingForm({ preview, onApply, onCancel, applying }: Ma
   const [customerRows, setCustomerRows] = useState<CustomerRow[]>(
     preview.unknownCustomers.map((c) => ({ alias: c.alias, selected: null, draft: null })),
   );
+  const [driftRows, setDriftRows] = useState<DriftRow[]>(
+    preview.driftedMenus.map((d) => ({
+      alias: d.alias,
+      productId: d.productId,
+      productNameTh: d.productNameTh,
+      productNameEn: d.productNameEn,
+      currentPrice: d.currentPrice,
+      sheetPrice: d.sheetPrice,
+      action: null,
+      remapSelected: null,
+      remapDraft: null,
+    })),
+  );
   // Order rows the cashier has chosen to skip this sync (e.g. duplicates or
   // garbage trailing rows). Persisted server-side; removed from the visible list.
   const [ignoredRows, setIgnoredRows] = useState<ParsedOrder[]>([]);
@@ -57,7 +108,8 @@ export default function MappingForm({ preview, onApply, onCancel, applying }: Ma
 
   const menuResolved = menuRows.every((r) => r.selected !== null || r.draft !== null);
   const customerResolved = customerRows.every((r) => r.selected !== null || r.draft !== null);
-  const canApply = menuResolved && customerResolved;
+  const driftsResolved = driftRows.every(driftResolved);
+  const canApply = menuResolved && customerResolved && driftsResolved;
 
   const ignoreMenu = async (alias: string) => {
     await sheets.ignoreMenu(preview.tab, alias);
@@ -89,18 +141,21 @@ export default function MappingForm({ preview, onApply, onCancel, applying }: Ma
   };
 
   const buildMappings = (): SyncMappings => ({
-    menu: menuRows.map((r): [string, MenuMappingChoice] => [
-      r.alias,
-      r.selected
-        ? { existing: { productId: r.selected.id } }
-        : {
-            create: {
-              nameTh: r.draft!.nameTh,
-              nameEn: r.draft!.nameEn.trim() ? r.draft!.nameEn : null,
-              sellingPrice: r.draft!.sellingPrice,
+    menu: [
+      ...menuRows.map((r): [string, MenuMappingChoice] => [
+        r.alias,
+        r.selected
+          ? { existing: { productId: r.selected.id } }
+          : {
+              create: {
+                nameTh: r.draft!.nameTh,
+                nameEn: r.draft!.nameEn.trim() ? r.draft!.nameEn : null,
+                sellingPrice: r.draft!.sellingPrice,
+              },
             },
-          },
-    ]),
+      ]),
+      ...driftRows.map((r): [string, MenuMappingChoice] => [r.alias, driftChoice(r)]),
+    ],
     customer: customerRows.map((r): [string, CustomerMappingChoice] => [
       r.alias,
       r.selected
@@ -123,6 +178,30 @@ export default function MappingForm({ preview, onApply, onCancel, applying }: Ma
             +{preview.willInsert} new · ~{preview.willUpdate} updated · −{preview.willSoftDelete} removed
           </span>
         </header>
+
+        {driftRows.length > 0 && (
+          <section className="space-y-3">
+            <div className="flex items-center gap-2 text-warning-foreground">
+              <AlertTriangle className="h-4 w-4" />
+              <h3 className="font-semibold">Price changed since last sync ({driftRows.length})</h3>
+            </div>
+            <p className="text-sm text-muted-foreground">
+              These names already map to a product, but this week's sheet price differs.
+              Confirm what each one should do before syncing.
+            </p>
+            <div className="space-y-3">
+              {driftRows.map((row, i) => (
+                <DriftRowEditor
+                  key={row.alias}
+                  row={row}
+                  onChange={(updated) =>
+                    setDriftRows((rows) => rows.map((r, idx) => (idx === i ? updated : r)))
+                  }
+                />
+              ))}
+            </div>
+          </section>
+        )}
 
         {menuRows.length > 0 && (
           <section className="space-y-3">
@@ -324,6 +403,131 @@ function MenuRowEditor({
         )}
       </CardContent>
     </Card>
+  );
+}
+
+function DriftRowEditor({
+  row,
+  onChange,
+}: {
+  row: DriftRow;
+  onChange: (r: DriftRow) => void;
+}) {
+  const productLabel = row.productNameEn
+    ? `${row.productNameTh} · ${row.productNameEn}`
+    : row.productNameTh;
+  return (
+    <Card className="border-warning/40 bg-warning/5">
+      <CardContent className="pt-5 space-y-3">
+        <div>
+          <span className="font-medium">{row.alias}</span>
+          <span className="text-sm text-muted-foreground ml-2">→ {productLabel}</span>
+        </div>
+        <div className="flex flex-wrap items-center gap-2">
+          <DriftAction
+            active={row.action === 'keep'}
+            onClick={() => onChange({ ...row, action: 'keep', remapSelected: null, remapDraft: null })}
+          >
+            Keep ฿{row.currentPrice}
+          </DriftAction>
+          <DriftAction
+            active={row.action === 'update'}
+            onClick={() => onChange({ ...row, action: 'update', remapSelected: null, remapDraft: null })}
+          >
+            Update → ฿{row.sheetPrice}
+          </DriftAction>
+          <DriftAction
+            active={row.action === 'remap'}
+            onClick={() => onChange({ ...row, action: 'remap' })}
+          >
+            Remap / new product
+          </DriftAction>
+        </div>
+        {row.action === 'remap' && !row.remapDraft && (
+          <SearchPicker
+            placeholder="Map to a different product…"
+            search={async (q) => {
+              const items = await catalog.searchProducts(q);
+              return items.map((p) => ({
+                id: p.id,
+                primary: p.nameTh,
+                secondary: p.nameEn ?? null,
+              }));
+            }}
+            onPick={(r) => onChange({ ...row, remapSelected: r, remapDraft: null })}
+            onCreate={() =>
+              onChange({
+                ...row,
+                remapSelected: null,
+                remapDraft: { nameTh: row.alias, nameEn: '', sellingPrice: row.sheetPrice },
+              })
+            }
+            selected={row.remapSelected}
+          />
+        )}
+        {row.action === 'remap' && row.remapDraft && (
+          <div className="grid grid-cols-1 sm:grid-cols-3 gap-3">
+            <div className="space-y-1.5">
+              <Label>Name (Thai)</Label>
+              <Input
+                value={row.remapDraft.nameTh}
+                onChange={(e) =>
+                  onChange({ ...row, remapDraft: { ...row.remapDraft!, nameTh: e.target.value } })
+                }
+              />
+            </div>
+            <div className="space-y-1.5">
+              <Label>Name (English)</Label>
+              <Input
+                value={row.remapDraft.nameEn}
+                placeholder="optional"
+                onChange={(e) =>
+                  onChange({ ...row, remapDraft: { ...row.remapDraft!, nameEn: e.target.value } })
+                }
+              />
+            </div>
+            <div className="space-y-1.5">
+              <Label>Price (฿)</Label>
+              <Input
+                type="number"
+                value={row.remapDraft.sellingPrice}
+                onChange={(e) =>
+                  onChange({
+                    ...row,
+                    remapDraft: {
+                      ...row.remapDraft!,
+                      sellingPrice: parseInt(e.target.value || '0', 10),
+                    },
+                  })
+                }
+              />
+            </div>
+          </div>
+        )}
+      </CardContent>
+    </Card>
+  );
+}
+
+function DriftAction({
+  active,
+  onClick,
+  children,
+}: {
+  active: boolean;
+  onClick: () => void;
+  children: ReactNode;
+}) {
+  return (
+    <Button
+      type="button"
+      size="sm"
+      variant={active ? 'default' : 'secondary'}
+      className={cn(!active && 'text-muted-foreground')}
+      onClick={onClick}
+    >
+      {children}
+    </Button>
   );
 }
 

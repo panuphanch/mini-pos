@@ -14,12 +14,29 @@ pub struct UnknownCustomer {
     pub alias: String,
 }
 
+/// A menu column header that already resolves to a product, but whose price on
+/// the sheet this week disagrees with the bound product's price. The wife reuses
+/// short headers across weeks; when she repoints one at a repriced or different
+/// cake, the stale alias would otherwise apply the old price silently. We surface
+/// the conflict so the cashier must decide rather than letting it slip through.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct DriftedMenu {
+    pub alias: String,
+    pub product_id: String,
+    pub product_name_th: String,
+    pub product_name_en: Option<String>,
+    pub current_price: i64,
+    pub sheet_price: i64,
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct SyncPreview {
     pub tab: String,
     pub week_start_date: String,
     pub unknown_menus: Vec<UnknownMenu>,
+    pub drifted_menus: Vec<DriftedMenu>,
     pub unknown_customers: Vec<UnknownCustomer>,
     pub parsed_orders: Vec<ParsedOrder>,
     pub will_insert: i64,
@@ -39,6 +56,10 @@ pub enum MenuMappingChoice {
     Existing { product_id: String },
     #[serde(rename_all = "camelCase")]
     Create { name_th: String, name_en: Option<String>, selling_price: i64 },
+    // Resolution for a drifted alias: keep the same product but adopt the
+    // sheet's new price, updating the product so future weeks stay aligned.
+    #[serde(rename_all = "camelCase")]
+    UpdatePrice { product_id: String, selling_price: i64 },
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
