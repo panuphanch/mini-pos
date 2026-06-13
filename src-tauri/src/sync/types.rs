@@ -121,6 +121,27 @@ mod tests {
     }
 
     #[test]
+    fn menu_mapping_update_price_uses_camel_case() {
+        let json = serde_json::json!({
+            "updatePrice": { "productId": "abc", "sellingPrice": 115 }
+        });
+        let decoded: MenuMappingChoice = serde_json::from_value(json.clone()).unwrap();
+        match decoded {
+            MenuMappingChoice::UpdatePrice { product_id, selling_price } => {
+                assert_eq!(product_id, "abc");
+                assert_eq!(selling_price, 115);
+            }
+            other => panic!("expected UpdatePrice, got {:?}", other),
+        }
+        // Round-trip back to the same JSON shape the TS layer sends.
+        let encoded = serde_json::to_value(&MenuMappingChoice::UpdatePrice {
+            product_id: "abc".into(),
+            selling_price: 115,
+        }).unwrap();
+        assert_eq!(encoded, json);
+    }
+
+    #[test]
     fn menu_mapping_existing_uses_camel_case() {
         let json = serde_json::json!({ "existing": { "productId": "abc" } });
         let decoded: MenuMappingChoice = serde_json::from_value(json).unwrap();
