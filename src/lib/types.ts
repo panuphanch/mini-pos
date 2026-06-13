@@ -117,6 +117,15 @@ export interface UnknownCustomer {
   alias: string;
 }
 
+export interface DriftedMenu {
+  alias: string;
+  productId: string;
+  productNameTh: string;
+  productNameEn: string | null;
+  currentPrice: number;
+  sheetPrice: number;
+}
+
 export interface ParsedOrderItem {
   menuName: string;
   quantity: number;
@@ -135,6 +144,7 @@ export interface SyncPreview {
   tab: string;
   weekStartDate: string;
   unknownMenus: UnknownMenu[];
+  driftedMenus: DriftedMenu[];
   unknownCustomers: UnknownCustomer[];
   parsedOrders: ParsedOrder[];
   willInsert: number;
@@ -145,7 +155,8 @@ export interface SyncPreview {
 
 export type MenuMappingChoice =
   | { existing: { productId: string } }
-  | { create: { nameTh: string; nameEn: string | null; sellingPrice: number } };
+  | { create: { nameTh: string; nameEn: string | null; sellingPrice: number } }
+  | { updatePrice: { productId: string; sellingPrice: number } };
 
 export type CustomerMappingChoice =
   | { existing: { customerId: string } }
