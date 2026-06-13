@@ -153,6 +153,12 @@ pub async fn apply_sync(
     // two different unknown aliases (top-menu list + a shortened order column
     // header). If the user fills both rows with identical "Create new" details
     // we want one product, not two — otherwise future catalog edits diverge.
+    //
+    // NB: these catalog mutations (update_price / create / upsert_alias) commit
+    // immediately, *before* the order transaction below. If the order tx later
+    // fails, the catalog edits stay applied — and a retry preview then sees the
+    // price already matching, so the drift silently self-resolves. Benign because
+    // every catalog op here is idempotent, but non-obvious.
     let mut menu_alias_to_product: HashMap<String, String> = HashMap::new();
     let mut created_menu_by_payload: HashMap<(String, Option<String>, i64), String> = HashMap::new();
     // Aliases the cashier explicitly resolved in this request. A drifted alias
