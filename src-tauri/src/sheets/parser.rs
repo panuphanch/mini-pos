@@ -60,6 +60,15 @@ fn cell<'a>(row: &'a [String], idx: usize) -> &'a str {
 pub fn parse_tab(vr: &ValueRange) -> Result<ParsedTab, ParseError> {
     let rows = &vr.values;
 
+    // Resolve the price column from the menu header row. Older tabs put Price at
+    // col E (idx 4); newer tabs (e.g. Order_35) widen the table with computed
+    // amount columns, pushing Price right (col F). Locate it by the "Price"
+    // header and fall back to idx 4 for old tabs.
+    let price_col = rows.iter()
+        .find(|r| cell(r, 0) == "Menu")
+        .and_then(|r| r.iter().position(|c| c.trim() == "Price"))
+        .unwrap_or(4);
+
     // --- Menu table: rows starting at index 0, stop when col A blank ---
     let mut menu: Vec<MenuRow> = Vec::new();
     let mut i = 0;
@@ -67,7 +76,7 @@ pub fn parse_tab(vr: &ValueRange) -> Result<ParsedTab, ParseError> {
         let a = cell(&rows[i], 0);
         if a.is_empty() { break; }
         if a == "Menu" { i += 1; continue; }
-        let price_str = cell(&rows[i], 4);
+        let price_str = cell(&rows[i], price_col);
         let price: i64 = price_str.parse().unwrap_or(0);
         if price > 0 {
             menu.push(MenuRow { menu_name: a.to_string(), price });
@@ -186,6 +195,25 @@ mod tests {
             ParsedOrderItem { menu_name: "มัทฉะเลเยอร์".into(), quantity: 2 }
         ]);
         assert_eq!(p.orders[1].delivery_location.as_deref(), Some("Pilates Timetable"));
+    }
+
+    #[test]
+    fn price_column_located_by_header_when_table_is_wider() {
+        // Newer tabs (e.g. Order_35) widen the menu table with computed amount
+        // columns, so "Price" sits at col F (idx 5), not col E. Layout taken from
+        // the real sheet: A=Menu, C=Total, D=net, F=Price, G/I=amounts.
+        let vr = vr(vec![
+            vec!["Menu", "", "Total", "", "", "Price", "Amount", "", "Total"],
+            vec!["Carrot Cranberry", "", "", "-8", "", "260", "2080", "", "2080"],
+            vec!["เค้กโคตรเผือก box", "", "16", "0", "", "149", "2384", "", "2384"],
+            vec![""],
+            vec!["ช่องทาง", "ลูกค้า", "Carrot Cran", "เค้กโคตรเผือก box", "สถานที่ส่ง", "Note"],
+            vec!["Line@", "K.Pangzyy", "1", "1", "home", "SUN"],
+        ]);
+        let p = parse_tab(&vr).unwrap();
+        assert_eq!(p.menu.len(), 2);
+        assert_eq!(p.menu[0], MenuRow { menu_name: "Carrot Cranberry".into(), price: 260 });
+        assert_eq!(p.menu[1], MenuRow { menu_name: "เค้กโคตรเผือก box".into(), price: 149 });
     }
 
     #[test]
