@@ -73,3 +73,25 @@ This only happens the first time.
 ## Need help?
 
 Open an issue on the [GitHub repo](https://github.com/panuphanch/mini-pos/issues) or ask the person who set this up for you.
+
+---
+
+## Development
+
+Built with [Tauri 2](https://tauri.app/) (Rust backend) + React 18 / TypeScript / Vite (frontend), SQLite for local storage, and the Google Sheets API for syncing weekly orders.
+
+**Prerequisites:** Node.js, Rust toolchain ([rustup](https://rustup.rs/)), and the [Tauri system dependencies](https://tauri.app/start/prerequisites/) for your OS.
+
+```bash
+npm install
+npm run tauri dev        # run the desktop app with hot reload
+npm run tauri build      # build a distributable .dmg / .msi
+
+npm test                 # frontend unit tests (vitest)
+npm run test:e2e         # Playwright layout tests
+cd src-tauri && cargo test   # backend tests
+```
+
+`npm run dev` runs the frontend alone on port 1420, but Tauri APIs are unavailable there — use `npm run tauri dev` to exercise the real app.
+
+See [CLAUDE.md](CLAUDE.md) for the architecture overview.
