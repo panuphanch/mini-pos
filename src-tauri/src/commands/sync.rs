@@ -30,9 +30,9 @@ pub async fn test_sheets_connection(
 #[tauri::command]
 pub async fn sync_week(
     state: State<'_, AppState>,
-    config: AppConfig,
     tab: String,
 ) -> Result<SyncPreview, String> {
+    let config = state.config().await;
     let client = state.ensure_sheets_client(&config).await
         .map_err(|e| format!("Auth error: {}", e))?;
     engine::preview_sync(&state.db, client.as_ref(), &config.spreadsheet_id, &tab).await
@@ -42,10 +42,10 @@ pub async fn sync_week(
 #[tauri::command]
 pub async fn apply_sync(
     state: State<'_, AppState>,
-    config: AppConfig,
     tab: String,
     mappings: SyncMappings,
 ) -> Result<SyncResult, String> {
+    let config = state.config().await;
     let client = state.ensure_sheets_client(&config).await
         .map_err(|e| format!("Auth error: {}", e))?;
     engine::apply_sync(&state.db, client.as_ref(), &config.spreadsheet_id, &tab, mappings).await

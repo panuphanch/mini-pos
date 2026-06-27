@@ -51,8 +51,8 @@ function App() {
           </div>
         )}
         <div className="flex-1 overflow-hidden">
-          {activeTab === 'pos' && <POSPage appConfig={config} />}
-          {activeTab === 'orders' && <OrdersPage appConfig={config} />}
+          {activeTab === 'pos' && <POSPage />}
+          {activeTab === 'orders' && <OrdersPage />}
           {activeTab === 'sync' && <SyncPage appConfig={config} />}
           {activeTab === 'settings' && (
             <SettingsPage appConfig={config} onConfigSaved={handleConfigSaved} />

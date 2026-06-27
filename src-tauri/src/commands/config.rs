@@ -1,41 +1,15 @@
-use crate::config::{migrate_from_json, AppConfig};
+use crate::config::AppConfig;
+use crate::state::AppState;
 use std::fs;
-use tauri::Manager;
+use tauri::State;
 
 #[tauri::command]
-pub fn load_config(app_handle: tauri::AppHandle) -> Result<AppConfig, String> {
-    let app_data_dir = app_handle
-        .path()
-        .app_data_dir()
-        .map_err(|e| format!("Failed to resolve app data dir: {}", e))?;
-
-    let config_path = app_data_dir.join("config.json");
-
-    if config_path.exists() {
-        let content = fs::read_to_string(&config_path)
-            .map_err(|e| format!("Failed to read config: {}", e))?;
-        let cfg = migrate_from_json(&content)
-            .map_err(|e| format!("Failed to parse config: {}", e))?;
-        // Persist normalized (drops old fields).
-        let json = serde_json::to_string_pretty(&cfg)
-            .map_err(|e| format!("Failed to serialize config: {}", e))?;
-        fs::write(&config_path, json)
-            .map_err(|e| format!("Failed to write config: {}", e))?;
-        Ok(cfg)
-    } else {
-        let default_config = AppConfig::default();
-        fs::create_dir_all(&app_data_dir)
-            .map_err(|e| format!("Failed to create config dir: {}", e))?;
-        let json = serde_json::to_string_pretty(&default_config)
-            .map_err(|e| format!("Failed to serialize config: {}", e))?;
-        fs::write(&config_path, json)
-            .map_err(|e| format!("Failed to write default config: {}", e))?;
-        Ok(default_config)
-    }
+pub async fn load_config(state: State<'_, AppState>) -> Result<AppConfig, String> {
+    Ok(state.config().await)
 }
 
 #[tauri::command]
-pub fn save_config(app_handle: tauri::AppHandle, config: AppConfig) -> Result<String, String> {
+pub async fn save_config(state: State<'_, AppState>, config: AppConfig) -> Result<String, String> {
     if config.printer_ip.is_empty() {
         return Err("Printer IP cannot be empty".to_string());
     }
@@ -44,17 +18,13 @@ pub fn save_config(app_handle: tauri::AppHandle, config: AppConfig) -> Result<St
     }
     // spreadsheet_id may be empty until the user fills it in Settings.
 
-    let app_data_dir = app_handle
-        .path()
-        .app_data_dir()
-        .map_err(|e| format!("Failed to resolve app data dir: {}", e))?;
-    fs::create_dir_all(&app_data_dir)
+    fs::create_dir_all(&state.app_data_dir)
         .map_err(|e| format!("Failed to create config dir: {}", e))?;
-
-    let config_path = app_data_dir.join("config.json");
+    let config_path = state.app_data_dir.join("config.json");
     let json = serde_json::to_string_pretty(&config)
         .map_err(|e| format!("Failed to serialize config: {}", e))?;
     fs::write(&config_path, json).map_err(|e| format!("Failed to write config: {}", e))?;
 
+    state.set_config(config).await;
     Ok("Config saved successfully".to_string())
 }

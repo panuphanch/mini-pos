@@ -1,4 +1,6 @@
 use serde::{Deserialize, Serialize};
+use std::fs;
+use std::path::Path;
 
 #[derive(Debug, Serialize, Deserialize, Clone, PartialEq, Eq)]
 #[serde(rename_all = "camelCase")]
@@ -52,8 +54,44 @@ impl Default for AppConfig {
     }
 }
 
+/// Read config.json from `app_data_dir`, or seed it with defaults. This is the
+/// single load path: `AppState` calls it once at startup and holds the result
+/// as the in-process source of truth. On a present-but-corrupt file we fall back
+/// to defaults *without* overwriting, so the bad file stays recoverable.
+pub fn load_or_init(app_data_dir: &Path) -> AppConfig {
+    let config_path = app_data_dir.join("config.json");
+    if config_path.exists() {
+        match fs::read_to_string(&config_path) {
+            Ok(content) => match migrate_from_json(&content) {
+                Ok(cfg) => {
+                    // Persist normalized (drops old fields, fills new ones).
+                    if let Ok(json) = serde_json::to_string_pretty(&cfg) {
+                        let _ = fs::write(&config_path, json);
+                    }
+                    cfg
+                }
+                Err(e) => {
+                    eprintln!("config parse failed, using defaults (file preserved): {e}");
+                    AppConfig::default()
+                }
+            },
+            Err(e) => {
+                eprintln!("config read failed, using defaults: {e}");
+                AppConfig::default()
+            }
+        }
+    } else {
+        let cfg = AppConfig::default();
+        let _ = fs::create_dir_all(app_data_dir);
+        if let Ok(json) = serde_json::to_string_pretty(&cfg) {
+            let _ = fs::write(&config_path, json);
+        }
+        cfg
+    }
+}
+
 /// Migrate older config JSON (with apiUrl etc.) by dropping unknown fields
-/// and filling defaults for missing ones. Called from `load_config`.
+/// and filling defaults for missing ones. Called from `load_or_init`.
 pub fn migrate_from_json(raw: &str) -> Result<AppConfig, serde_json::Error> {
     let v: serde_json::Value = serde_json::from_str(raw)?;
     let obj = v.as_object();
@@ -136,5 +174,33 @@ mod tests {
         let raw = r#"{ "defaultTabStrategy": { "pinned": "Order_30" } }"#;
         let cfg = migrate_from_json(raw).unwrap();
         assert_eq!(cfg.default_tab_strategy, TabStrategy::Pinned("Order_30".to_string()));
+    }
+
+    #[test]
+    fn load_or_init_seeds_default_when_missing() {
+        let dir = std::env::temp_dir().join("grannys-pos-test-cfg-missing");
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).unwrap();
+        let cfg = load_or_init(&dir);
+        assert_eq!(cfg.shop_name, "Granny's Bakery");
+        assert!(dir.join("config.json").exists(), "should seed config.json");
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn load_or_init_reads_and_normalizes_existing() {
+        let dir = std::env::temp_dir().join("grannys-pos-test-cfg-existing");
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).unwrap();
+        std::fs::write(
+            dir.join("config.json"),
+            r#"{ "printerIp": "10.0.0.9", "paperWidth": 58, "apiUrl": "x" }"#,
+        ).unwrap();
+        let cfg = load_or_init(&dir);
+        assert_eq!(cfg.printer_ip, "10.0.0.9");
+        assert_eq!(cfg.paper_width, 58);
+        let written = std::fs::read_to_string(dir.join("config.json")).unwrap();
+        assert!(!written.contains("apiUrl"), "dropped field should not survive normalize");
+        let _ = std::fs::remove_dir_all(&dir);
     }
 }

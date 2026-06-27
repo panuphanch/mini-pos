@@ -81,7 +81,7 @@ export default function SyncPage({ appConfig }: SyncPageProps) {
     setMessage('');
     setPreview(null);
     try {
-      const p = await sheets.syncWeek(appConfig, selectedTab);
+      const p = await sheets.syncWeek(selectedTab);
       setPreview(p);
       if (p.unknownMenus.length === 0 && p.unknownCustomers.length === 0) {
         await doApply({ menu: [], customer: [] }, p);
@@ -98,7 +98,7 @@ export default function SyncPage({ appConfig }: SyncPageProps) {
     setApplying(true);
     setError('');
     try {
-      const res: SyncResult = await sheets.applySync(appConfig, p.tab, mappings);
+      const res: SyncResult = await sheets.applySync(p.tab, mappings);
       setMessage(
         `Synced ${p.tab}: +${res.rowsAdded} new · ~${res.rowsUpdated} updated · −${res.rowsSoftDeleted} removed`,
       );

@@ -268,6 +268,212 @@ pub fn aggregate_items(items: &[OrderItemRow]) -> Vec<AggregatedItem> {
     out
 }
 
+// === Read views ===
+//
+// The enriched shapes the UI consumes: an order joined with its customer name,
+// item summary/lines, and resolved merge relationships. All order-read SQL lives
+// behind `list_view` / `get_view` so command handlers stay thin and the merge
+// resolution is written once.
+
+#[derive(Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct OrderListRow {
+    pub id: String,
+    pub order_number: String,
+    pub customer_name: String,
+    pub channel: Option<String>,
+    pub delivery_location: Option<String>,
+    pub total_amount: i64,
+    pub source_tab: Option<String>,
+    pub source_row: Option<i64>,
+    pub printed_at: Option<String>,
+    pub print_count: i64,
+    pub deleted_at: Option<String>,
+    pub order_date: String,
+    pub notes: Option<String>,
+    pub items_summary: String,
+    pub sync_locked: bool,
+    pub merged_into_id: Option<String>,
+    pub merged_into_order_number: Option<String>,
+    pub merged_from_count: i64,
+}
+
+#[derive(Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct OrderDetailItem {
+    pub product_id: String,
+    pub name_th: String,
+    pub quantity: i64,
+    pub unit_price: i64,
+}
+
+#[derive(Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct OrderDetail {
+    pub id: String,
+    pub order_number: String,
+    pub customer_name: String,
+    pub channel: Option<String>,
+    pub delivery_location: Option<String>,
+    pub notes: Option<String>,
+    pub status: String,
+    pub total_amount: i64,
+    pub discount: i64,
+    pub delivery_fee: i64,
+    pub order_date: String,
+    pub source_tab: Option<String>,
+    pub source_row: Option<i64>,
+    pub printed_at: Option<String>,
+    pub print_count: i64,
+    pub deleted_at: Option<String>,
+    pub sync_locked: bool,
+    pub merged_into_id: Option<String>,
+    pub merged_into_order_number: Option<String>,
+    pub merged_from_count: i64,
+    pub items: Vec<OrderDetailItem>,
+}
+
+/// Resolve an order's merge relationships: how many donor rows point at it, and
+/// (if it is itself a donor) the order number it was merged into. Used by both
+/// the list and detail views — written once so the two can't drift.
+async fn merge_info(
+    pool: &SqlitePool,
+    id: &str,
+    merged_into_id: Option<&str>,
+) -> Result<(i64, Option<String>), sqlx::Error> {
+    let merged_from_count: (i64,) =
+        sqlx::query_as(r#"SELECT COUNT(*) FROM "order" WHERE merged_into_id = ?"#)
+            .bind(id)
+            .fetch_one(pool)
+            .await?;
+    let merged_into_order_number = match merged_into_id {
+        Some(mid) => sqlx::query_as::<_, (String,)>(
+            r#"SELECT order_number FROM "order" WHERE id = ?"#,
+        )
+        .bind(mid)
+        .fetch_optional(pool)
+        .await?
+        .map(|t| t.0),
+        None => None,
+    };
+    Ok((merged_from_count.0, merged_into_order_number))
+}
+
+/// Per-order item summary like "Carrot Cake×4 Mango×2". Collapses identical
+/// `(product, unit_price)` rows the way [`aggregate_items`] does, but in SQL for
+/// the list view. A merged order keeps one `order_item` row per source sheet
+/// row, so the same product can appear several times.
+async fn items_summary(pool: &SqlitePool, order_id: &str) -> Result<String, sqlx::Error> {
+    let items = sqlx::query_as::<_, (String, i64)>(
+        r#"SELECT p.name_th, SUM(oi.quantity) AS qty FROM order_item oi
+           JOIN product p ON p.id = oi.product_id
+           WHERE oi.order_id = ?
+           GROUP BY oi.product_id, oi.unit_price
+           ORDER BY MIN(oi.id)"#,
+    )
+    .bind(order_id)
+    .fetch_all(pool)
+    .await?;
+    Ok(items
+        .iter()
+        .map(|(n, q)| format!("{}×{}", n, q))
+        .collect::<Vec<_>>()
+        .join(" "))
+}
+
+/// List orders for the UI, enriched with customer name, item summary, and merge
+/// relationships.
+// ponytail: per-order enrichment queries (N+1) — fine at weekly-bakery scale
+// (limit 200, dozens of rows). Batch into IN-clause queries if it ever grows.
+pub async fn list_view(
+    pool: &SqlitePool,
+    tab: Option<&str>,
+    include_deleted: bool,
+    limit: i64,
+) -> Result<Vec<OrderListRow>, sqlx::Error> {
+    let rows = list_by_tab(pool, tab, include_deleted, limit).await?;
+    let mut out = Vec::with_capacity(rows.len());
+    for r in rows {
+        let customer_name = crate::db::customers::get_by_id(pool, &r.customer_id)
+            .await?
+            .map(|c| c.name)
+            .unwrap_or_else(|| "(unknown)".into());
+        let items_summary = items_summary(pool, &r.id).await?;
+        let (merged_from_count, merged_into_order_number) =
+            merge_info(pool, &r.id, r.merged_into_id.as_deref()).await?;
+        out.push(OrderListRow {
+            id: r.id,
+            order_number: r.order_number,
+            customer_name,
+            channel: r.channel,
+            delivery_location: r.delivery_location,
+            total_amount: r.total_amount,
+            source_tab: r.source_tab,
+            source_row: r.source_row,
+            printed_at: r.printed_at,
+            print_count: r.print_count,
+            deleted_at: r.deleted_at,
+            order_date: r.order_date,
+            notes: r.notes,
+            items_summary,
+            sync_locked: r.sync_locked != 0,
+            merged_into_id: r.merged_into_id,
+            merged_into_order_number,
+            merged_from_count,
+        });
+    }
+    Ok(out)
+}
+
+/// Full order detail for the UI, with item lines (product names) and merge info.
+pub async fn get_view(pool: &SqlitePool, id: &str) -> Result<Option<OrderDetail>, sqlx::Error> {
+    let Some((r, items)) = get_with_items(pool, id).await? else {
+        return Ok(None);
+    };
+    let customer_name = crate::db::customers::get_by_id(pool, &r.customer_id)
+        .await?
+        .map(|c| c.name)
+        .unwrap_or_else(|| "(unknown)".into());
+    let mut detail_items = Vec::with_capacity(items.len());
+    for it in items {
+        let name_th = crate::db::products::get_by_id(pool, &it.product_id)
+            .await?
+            .map(|p| p.name_th)
+            .unwrap_or_else(|| "(deleted product)".into());
+        detail_items.push(OrderDetailItem {
+            product_id: it.product_id,
+            name_th,
+            quantity: it.quantity,
+            unit_price: it.unit_price,
+        });
+    }
+    let (merged_from_count, merged_into_order_number) =
+        merge_info(pool, &r.id, r.merged_into_id.as_deref()).await?;
+    Ok(Some(OrderDetail {
+        id: r.id,
+        order_number: r.order_number,
+        customer_name,
+        channel: r.channel,
+        delivery_location: r.delivery_location,
+        notes: r.notes,
+        status: r.status,
+        total_amount: r.total_amount,
+        discount: r.discount,
+        delivery_fee: r.delivery_fee,
+        order_date: r.order_date,
+        source_tab: r.source_tab,
+        source_row: r.source_row,
+        printed_at: r.printed_at,
+        print_count: r.print_count,
+        deleted_at: r.deleted_at,
+        sync_locked: r.sync_locked != 0,
+        merged_into_id: r.merged_into_id,
+        merged_into_order_number,
+        merged_from_count,
+        items: detail_items,
+    }))
+}
+
 /// Apply a manual edit to an order. Replaces the line items, recomputes the
 /// total as `subtotal - discount + delivery_fee`, and flips `sync_locked = 1`
 /// so future syncs from the sheet leave this row alone.
@@ -1163,5 +1369,48 @@ mod tests {
         let n = soft_delete_missing_rows(&mut tx, "Order_30", &[4]).await.unwrap();
         tx.commit().await.unwrap();
         assert_eq!(n, 0);
+    }
+
+    #[tokio::test]
+    async fn views_enrich_with_customer_summary_and_merge_info() {
+        let pool = init_memory_pool().await.unwrap();
+        let (p, c) = seed_pc(&pool).await;
+        let mut tx = pool.begin().await.unwrap();
+        // Master with two same-product rows; after a donor merges in (its one
+        // row moves onto the master) the summary must collapse all three into
+        // one "name×3" entry.
+        let a = upsert_from_source(&mut tx, UpsertOrderInput {
+            customer_id: &c.id, channel: None, delivery_location: None, notes: None,
+            total_amount: 170, order_date: "2026-05-11",
+            source_tab: "Order_30", source_row: 4,
+            items: vec![
+                UpsertOrderItemInput { product_id: &p.id, quantity: 1, unit_price: 85 },
+                UpsertOrderItemInput { product_id: &p.id, quantity: 1, unit_price: 85 },
+            ],
+        }).await.unwrap();
+        let b = upsert_from_source(&mut tx, UpsertOrderInput {
+            customer_id: &c.id, channel: None, delivery_location: None, notes: None,
+            total_amount: 85, order_date: "2026-05-11",
+            source_tab: "Order_30", source_row: 5,
+            items: vec![UpsertOrderItemInput { product_id: &p.id, quantity: 1, unit_price: 85 }],
+        }).await.unwrap();
+        tx.commit().await.unwrap();
+        merge_orders(&pool, &[a.order_id.clone(), b.order_id.clone()]).await.unwrap();
+
+        // Default list shows the master only, enriched.
+        let list = list_view(&pool, Some("Order_30"), false, 100).await.unwrap();
+        assert_eq!(list.len(), 1);
+        let master = &list[0];
+        assert_eq!(master.id, a.order_id);
+        assert_eq!(master.customer_name, "K.Parin");
+        assert_eq!(master.items_summary, "เค้กช็อคฟัดจ์×3");
+        assert_eq!(master.merged_from_count, 1, "one donor merged into the master");
+        assert!(master.merged_into_order_number.is_none());
+
+        // The donor, fetched directly, points back at the master's order number;
+        // its items have moved onto the master, so it carries none.
+        let donor = get_view(&pool, &b.order_id).await.unwrap().unwrap();
+        assert_eq!(donor.merged_into_order_number.as_deref(), Some(master.order_number.as_str()));
+        assert!(donor.items.is_empty());
     }
 }

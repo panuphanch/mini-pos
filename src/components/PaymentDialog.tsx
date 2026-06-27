@@ -3,7 +3,7 @@ import { Printer } from 'lucide-react';
 import { useCartStore, type DiscountType } from '../stores/cart';
 import NumPad from './NumPad';
 import { printer as tauriPrinter } from '../lib/tauri';
-import type { AppConfig, PrinterConfig, ReceiptData } from '../lib/types';
+import type { ReceiptData } from '../lib/types';
 import { Button } from './ui/button';
 import { Label } from './ui/label';
 import {
@@ -18,10 +18,9 @@ import { cn } from '../lib/cn';
 
 interface PaymentDialogProps {
   onClose: () => void;
-  appConfig: AppConfig | null;
 }
 
-export default function PaymentDialog({ onClose, appConfig }: PaymentDialogProps) {
+export default function PaymentDialog({ onClose }: PaymentDialogProps) {
   const items = useCartStore((s) => s.items);
   const customerName = useCartStore((s) => s.customerName);
   const discountType = useCartStore((s) => s.discountType);
@@ -44,10 +43,6 @@ export default function PaymentDialog({ onClose, appConfig }: PaymentDialogProps
   const total = getTotal();
 
   const handlePrint = async () => {
-    if (!appConfig) {
-      setError('Config not loaded');
-      return;
-    }
     if (items.length === 0) {
       setError('Cart is empty');
       return;
@@ -68,19 +63,7 @@ export default function PaymentDialog({ onClose, appConfig }: PaymentDialogProps
         discount: discountValue,
         deliveryFee,
       };
-      const printerConfig: PrinterConfig = {
-        ip: appConfig.printerIp,
-        paperWidth: appConfig.paperWidth,
-        shopName: appConfig.shopName,
-        shopPhone: appConfig.shopPhone,
-        shopLine: appConfig.shopLine,
-        qrText: 'Scan to Pay',
-        qrCodeType: appConfig.promptpayType,
-        qrCodeValue: appConfig.promptpayValue,
-        thankYouMessage: appConfig.thankYouMessage,
-      };
-
-      await tauriPrinter.printReceipt(receiptData, printerConfig);
+      await tauriPrinter.printReceipt(receiptData);
       clear();
       onClose();
     } catch (err) {
