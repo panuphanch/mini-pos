@@ -11,7 +11,7 @@ import {
   Trash2,
 } from 'lucide-react';
 import { ordersApi } from '../lib/tauri';
-import type { AppConfig, OrderDetail, OrderListRow } from '../lib/types';
+import type { OrderDetail, OrderListRow } from '../lib/types';
 import { Button } from '../components/ui/button';
 import { Checkbox } from '../components/ui/checkbox';
 import { Label } from '../components/ui/label';
@@ -35,13 +35,9 @@ import {
 } from '../components/ui/dialog';
 import { cn } from '../lib/cn';
 
-interface OrdersPageProps {
-  appConfig: AppConfig | null;
-}
-
 const ALL_TABS = '__all__';
 
-export default function OrdersPage({ appConfig }: OrdersPageProps) {
+export default function OrdersPage() {
   const [orders, setOrders] = useState<OrderListRow[]>([]);
   const [loading, setLoading] = useState(true);
   const [filterTab, setFilterTab] = useState<string>(ALL_TABS);
@@ -165,10 +161,9 @@ export default function OrdersPage({ appConfig }: OrdersPageProps) {
   };
 
   const handlePrint = async (row: OrderListRow) => {
-    if (!appConfig) return;
     setPrintingId(row.id);
     try {
-      await ordersApi.print(appConfig, row.id);
+      await ordersApi.print(row.id);
       setDetails((prev) => {
         const next = { ...prev };
         delete next[row.id];

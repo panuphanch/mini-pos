@@ -27,6 +27,24 @@ pub struct PrinterConfig {
     pub thank_you_message: String,
 }
 
+/// Build the printer config from the app config. Both print paths (POS receipt
+/// and saved-order receipt) go through here, so the QR caption lives in one place.
+impl From<&crate::config::AppConfig> for PrinterConfig {
+    fn from(c: &crate::config::AppConfig) -> Self {
+        PrinterConfig {
+            ip: c.printer_ip.clone(),
+            paper_width: c.paper_width,
+            shop_name: c.shop_name.clone(),
+            shop_phone: c.shop_phone.clone(),
+            shop_line: c.shop_line.clone(),
+            qr_text: "Scan to Pay".to_string(),
+            qr_code_type: c.promptpay_type.clone(),
+            qr_code_value: c.promptpay_value.clone(),
+            thank_you_message: c.thank_you_message.clone(),
+        }
+    }
+}
+
 /// A single item on the receipt.
 #[derive(Debug, Serialize, Deserialize, Clone)]
 #[serde(rename_all = "camelCase")]

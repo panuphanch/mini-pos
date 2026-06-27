@@ -1,16 +1,12 @@
 import { useEffect, useState } from 'react';
-import type { ProductLite, AppConfig } from '../lib/types';
+import type { ProductLite } from '../lib/types';
 import { catalog } from '../lib/tauri';
 import { useCartStore } from '../stores/cart';
 import ProductGrid from '../components/ProductGrid';
 import Cart from '../components/Cart';
 import PaymentDialog from '../components/PaymentDialog';
 
-interface POSPageProps {
-  appConfig: AppConfig | null;
-}
-
-export default function POSPage({ appConfig }: POSPageProps) {
+export default function POSPage() {
   const [products, setProducts] = useState<ProductLite[]>([]);
   const [loading, setLoading] = useState(true);
   const [showPayment, setShowPayment] = useState(false);
@@ -35,7 +31,7 @@ export default function POSPage({ appConfig }: POSPageProps) {
         <Cart onCharge={() => setShowPayment(true)} />
       </div>
       {showPayment && (
-        <PaymentDialog onClose={() => setShowPayment(false)} appConfig={appConfig} />
+        <PaymentDialog onClose={() => setShowPayment(false)} />
       )}
     </div>
   );

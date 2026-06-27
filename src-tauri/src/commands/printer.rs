@@ -1,9 +1,16 @@
 use crate::printer::network;
 use crate::printer::receipt::{PrinterConfig, ReceiptData};
+use crate::state::AppState;
+use tauri::State;
 
-/// Print a full receipt to the thermal printer.
+/// Print a full receipt to the thermal printer. Printer config comes from the
+/// saved app config; only the cart-specific receipt data is passed in.
 #[tauri::command]
-pub fn print_receipt(receipt: ReceiptData, config: PrinterConfig) -> Result<String, String> {
+pub async fn print_receipt(
+    state: State<'_, AppState>,
+    receipt: ReceiptData,
+) -> Result<String, String> {
+    let config = PrinterConfig::from(&state.config().await);
     let commands = crate::printer::receipt::build_receipt(&receipt, &config)
         .map_err(|e| format!("Failed to build receipt: {}", e))?;
 

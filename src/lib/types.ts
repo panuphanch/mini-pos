@@ -190,18 +190,6 @@ export interface ReceiptData {
   deliveryFee: number;
 }
 
-export interface PrinterConfig {
-  ip: string;
-  paperWidth: number;
-  shopName: string;
-  shopPhone: string;
-  shopLine: string;
-  qrText: string;
-  qrCodeType: string;
-  qrCodeValue: string;
-  thankYouMessage: string;
-}
-
 // === POSPage cart ===
 
 export interface CartItem {
