@@ -188,6 +188,8 @@ export interface ReceiptData {
   discountType: string;
   discount: number;
   deliveryFee: number;
+  /** Print a QR with no amount so the customer types the figure in themselves. */
+  openAmount: boolean;
 }
 
 // === POSPage cart ===
