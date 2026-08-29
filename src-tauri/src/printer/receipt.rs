@@ -78,6 +78,11 @@ pub struct ReceiptData {
     pub open_amount: bool,
 }
 
+/// Base font size in pixels for the given paper width in mm.
+fn base_font_size(paper_mm: u32) -> f32 {
+    if paper_mm == 58 { FONT_SIZE_58MM } else { FONT_SIZE_80MM }
+}
+
 /// Width in pixels for the given paper width in mm.
 fn paper_width_px(paper_mm: u32) -> u32 {
     match paper_mm {
@@ -89,7 +94,7 @@ fn paper_width_px(paper_mm: u32) -> u32 {
 /// Build the complete ESC/POS command byte sequence for a receipt.
 pub fn build_receipt(receipt: &ReceiptData, config: &PrinterConfig) -> Result<Vec<u8>, String> {
     let width_px = paper_width_px(config.paper_width);
-    let font_size = if config.paper_width == 58 { FONT_SIZE_58MM } else { FONT_SIZE_80MM };
+    let font_size = base_font_size(config.paper_width);
     let separator = "------------------------------------------------";
 
     let mut cmds: Vec<u8> = Vec::new();
@@ -191,8 +196,10 @@ pub fn build_receipt(receipt: &ReceiptData, config: &PrinterConfig) -> Result<Ve
         "id_card" => AccountType::IdCard,
         other => return Err(format!("Invalid QR code type: '{}'", other)),
     };
-    // An open-amount QR omits the EMV amount field and is marked reusable: the
-    // customer may scan it, check the shipping cost with us, and come back.
+    // An open-amount QR omits the EMV amount field. `multiple_use = true` is
+    // load-bearing, not a convenience: the receipt travels in the delivery box,
+    // the customer learns the shipping cost afterwards, and may well scan, ask,
+    // and scan again. A one-time marker gets the second scan rejected outright.
     let qr_amount = if receipt.open_amount { 0.0 } else { total };
     let qr_payload = promptpay::generate_promptpay_qr(
         account_type,
@@ -442,9 +449,13 @@ mod tests {
     use super::*;
 
     fn config() -> PrinterConfig {
+        config_for(80)
+    }
+
+    fn config_for(paper_mm: u32) -> PrinterConfig {
         PrinterConfig {
             ip: "127.0.0.1".into(),
-            paper_width: 80,
+            paper_width: paper_mm,
             shop_name: "Granny's".into(),
             shop_phone: "02-000-0000".into(),
             shop_line: "@grannys".into(),
@@ -480,24 +491,37 @@ mod tests {
     }
 
     /// The rasterized bytes the shipping note produces when it prints.
-    fn note_raster() -> Vec<u8> {
+    fn note_raster(paper_mm: u32) -> Vec<u8> {
         thai::render_text_line(
             SHIPPING_NOT_INCLUDED_NOTE,
-            FONT_SIZE_80MM * 0.8,
-            paper_width_px(80),
+            base_font_size(paper_mm) * 0.8,
+            paper_width_px(paper_mm),
             Alignment::Left,
         )
     }
 
     /// The rasterized bytes of the QR caption — also the marker separating the
     /// figures half of the receipt from the QR half.
-    fn caption_raster() -> Vec<u8> {
+    fn caption_raster(paper_mm: u32) -> Vec<u8> {
         thai::render_text_line(
             "Scan to Pay",
-            FONT_SIZE_80MM,
-            paper_width_px(80),
+            base_font_size(paper_mm),
+            paper_width_px(paper_mm),
             Alignment::Center,
         )
+    }
+
+    /// Byte offset of `needle` in `haystack`.
+    fn find(haystack: &[u8], needle: &[u8]) -> usize {
+        haystack
+            .windows(needle.len())
+            .position(|w| w == needle)
+            .expect("expected marker present in receipt")
+    }
+
+    /// Everything the receipt prints before the QR caption — the figures half.
+    fn figures_half(bytes: &[u8], paper_mm: u32) -> Vec<u8> {
+        bytes[..find(bytes, &caption_raster(paper_mm))].to_vec()
     }
 
     /// The payload a closed-amount QR carries for `receipt(delivery_fee, _)`.
@@ -534,18 +558,35 @@ mod tests {
         let closed = build_receipt(&receipt(80.0, false), &config()).unwrap();
         let open = build_receipt(&receipt(80.0, true), &config()).unwrap();
 
-        let qr_caption = caption_raster();
-        let split = |b: &[u8]| {
-            b.windows(qr_caption.len())
-                .position(|w| w == qr_caption.as_slice())
-                .expect("QR caption present")
-        };
-        assert_eq!(closed[..split(&closed)], open[..split(&open)]);
+        assert_eq!(figures_half(&closed, 80), figures_half(&open, 80));
+    }
+
+    /// The fee=0 case — the actual cold-delivery path, and the one where the
+    /// new branch fires. Stronger than the fee>0 case above: it pins the note
+    /// as the *only* difference and pins where it sits, so a regression that
+    /// moved it above the bold total (or leaked bold across it) fails here.
+    #[test]
+    fn with_no_delivery_fee_the_note_is_the_only_difference() {
+        let closed = figures_half(&build_receipt(&receipt(0.0, false), &config()).unwrap(), 80);
+        let open = figures_half(&build_receipt(&receipt(0.0, true), &config()).unwrap(), 80);
+
+        let note = note_raster(80);
+        let at = find(&open, &note);
+
+        // Splice alone only proves the note is the sole difference — it says
+        // nothing about *where*, since the offset comes from where the note
+        // actually landed. Pin the position: the bytes immediately before it
+        // must be the bold-off that closes the "Amount due" line, so the note
+        // sits under the total and carries no bold.
+        assert_eq!(&open[at - ESC_BOLD_OFF.len()..at], &ESC_BOLD_OFF);
+
+        let spliced = [&closed[..at], &note[..], &closed[at..]].concat();
+        assert_eq!(open, spliced);
     }
 
     #[test]
     fn qr_caption_is_unchanged_by_the_flag() {
-        let caption = caption_raster();
+        let caption = caption_raster(80);
         for open_amount in [false, true] {
             let bytes = build_receipt(&receipt(0.0, open_amount), &config()).unwrap();
             assert!(contains(&bytes, &caption));
@@ -555,20 +596,29 @@ mod tests {
     #[test]
     fn open_amount_with_no_delivery_fee_prints_the_shipping_note() {
         let bytes = build_receipt(&receipt(0.0, true), &config()).unwrap();
-        assert!(contains(&bytes, &note_raster()));
+        assert!(contains(&bytes, &note_raster(80)));
     }
 
     #[test]
     fn open_amount_with_a_delivery_fee_suppresses_the_shipping_note() {
         let bytes = build_receipt(&receipt(80.0, true), &config()).unwrap();
-        assert!(!contains(&bytes, &note_raster()));
+        assert!(!contains(&bytes, &note_raster(80)));
+    }
+
+    /// The note is laid out from the paper width, so exercise the narrow roll
+    /// too — the 58mm branch of `base_font_size` is otherwise untested.
+    #[test]
+    fn the_note_prints_on_58mm_paper_too() {
+        let bytes = build_receipt(&receipt(0.0, true), &config_for(58)).unwrap();
+        assert!(contains(&bytes, &note_raster(58)));
+        assert!(!contains(&bytes, &note_raster(80)));
     }
 
     #[test]
     fn closed_amount_never_prints_the_shipping_note() {
         for fee in [0.0, 80.0] {
             let bytes = build_receipt(&receipt(fee, false), &config()).unwrap();
-            assert!(!contains(&bytes, &note_raster()));
+            assert!(!contains(&bytes, &note_raster(80)));
         }
     }
 }
