@@ -6,6 +6,7 @@ import { printer as tauriPrinter } from '../lib/tauri';
 import type { ReceiptData } from '../lib/types';
 import { Button } from './ui/button';
 import { Label } from './ui/label';
+import { Checkbox } from './ui/checkbox';
 import {
   Dialog,
   DialogContent,
@@ -37,6 +38,7 @@ export default function PaymentDialog({ onClose }: PaymentDialogProps) {
   const [error, setError] = useState('');
   const [numPadTarget, setNumPadTarget] = useState<'discount' | 'delivery' | null>(null);
   const [numPadValue, setNumPadValue] = useState('');
+  const [openAmount, setOpenAmount] = useState(false);
 
   const subtotal = getSubtotal();
   const discountAmount = getDiscountAmount();
@@ -62,6 +64,7 @@ export default function PaymentDialog({ onClose }: PaymentDialogProps) {
           discountType === 'none' ? 'none' : discountType === 'percentage' ? 'percentage' : 'fixed',
         discount: discountValue,
         deliveryFee,
+        openAmount,
       };
       await tauriPrinter.printReceipt(receiptData);
       clear();
@@ -156,6 +159,17 @@ export default function PaymentDialog({ onClose }: PaymentDialogProps) {
             >
               ฿{deliveryFee.toFixed(0)}
             </Button>
+          </div>
+
+          <div className="flex items-center gap-3">
+            <Checkbox
+              id="open-amount"
+              checked={openAmount}
+              onCheckedChange={(checked) => setOpenAmount(checked === true)}
+            />
+            <Label htmlFor="open-amount" className="cursor-pointer">
+              QR ไม่ระบุยอด
+            </Label>
           </div>
 
           <Separator />

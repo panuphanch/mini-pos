@@ -92,6 +92,9 @@ pub async fn print_order(
         discount_type: "none".into(),
         discount: order.discount as f64,
         delivery_fee: order.delivery_fee as f64,
+        // Synced orders always print a closed-amount QR for now; ส่งเย็น
+        // auto-detection is a follow-up.
+        open_amount: false,
     };
     let printer = PrinterConfig::from(&config);
     let bytes = build_receipt(&receipt, &printer)

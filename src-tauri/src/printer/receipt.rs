@@ -10,6 +10,15 @@ const ESC_BOLD_ON: [u8; 3] = [0x1B, 0x45, 0x01];
 /// ESC E 0 — disable bold.
 const ESC_BOLD_OFF: [u8; 3] = [0x1B, 0x45, 0x00];
 
+/// Base font size in pixels, by paper width.
+const FONT_SIZE_58MM: f32 = 30.0;
+const FONT_SIZE_80MM: f32 = 36.0;
+
+/// Printed under the total when the QR carries no amount and no delivery fee
+/// has been entered — without it the bold total reads as the sum to transfer,
+/// which it isn't.
+const SHIPPING_NOT_INCLUDED_NOTE: &str = "*ยอดนี้ยังไม่รวมค่าส่ง";
+
 /// Configuration for connecting to and formatting for the printer.
 #[derive(Debug, Serialize, Deserialize, Clone)]
 #[serde(rename_all = "camelCase")]
@@ -64,6 +73,9 @@ pub struct ReceiptData {
     pub discount_type: String,
     pub discount: f64,
     pub delivery_fee: f64,
+    /// Print a QR with no amount, so the customer types the figure in
+    /// themselves. Used for cold deliveries where shipping isn't yet known.
+    pub open_amount: bool,
 }
 
 /// Width in pixels for the given paper width in mm.
@@ -77,7 +89,7 @@ fn paper_width_px(paper_mm: u32) -> u32 {
 /// Build the complete ESC/POS command byte sequence for a receipt.
 pub fn build_receipt(receipt: &ReceiptData, config: &PrinterConfig) -> Result<Vec<u8>, String> {
     let width_px = paper_width_px(config.paper_width);
-    let font_size = if config.paper_width == 58 { 30.0 } else { 36.0 };
+    let font_size = if config.paper_width == 58 { FONT_SIZE_58MM } else { FONT_SIZE_80MM };
     let separator = "------------------------------------------------";
 
     let mut cmds: Vec<u8> = Vec::new();
@@ -158,6 +170,19 @@ pub fn build_receipt(receipt: &ReceiptData, config: &PrinterConfig) -> Result<Ve
     append_split_line(&mut cmds, "Amount due", &total_str, font_size * 1.2, width_px);
     cmds.extend_from_slice(&ESC_BOLD_OFF);
 
+    // === Shipping-not-included note ===
+    // Only when the QR is open-amount *and* no fee is itemised; with a fee the
+    // total above is genuine and the note would be misleading.
+    if receipt.open_amount && receipt.delivery_fee <= 0.0 {
+        append_thai_line(
+            &mut cmds,
+            SHIPPING_NOT_INCLUDED_NOTE,
+            font_size * 0.8,
+            width_px,
+            Alignment::Left,
+        );
+    }
+
     append_ascii_center(&mut cmds, separator);
 
     // === PromptPay QR ===
@@ -166,8 +191,15 @@ pub fn build_receipt(receipt: &ReceiptData, config: &PrinterConfig) -> Result<Ve
         "id_card" => AccountType::IdCard,
         other => return Err(format!("Invalid QR code type: '{}'", other)),
     };
-    let qr_payload =
-        promptpay::generate_promptpay_qr(account_type, &config.qr_code_value, total, false);
+    // An open-amount QR omits the EMV amount field and is marked reusable: the
+    // customer may scan it, check the shipping cost with us, and come back.
+    let qr_amount = if receipt.open_amount { 0.0 } else { total };
+    let qr_payload = promptpay::generate_promptpay_qr(
+        account_type,
+        &config.qr_code_value,
+        qr_amount,
+        receipt.open_amount,
+    );
 
     // QR label
     append_thai_line(&mut cmds, &config.qr_text, font_size, width_px, Alignment::Center);
@@ -404,3 +436,139 @@ fn append_qr_code(cmds: &mut Vec<u8>, data: &str, size: u8) {
     cmds.extend_from_slice(&[0x1B, 0x61, 0x00]);
 }
 
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn config() -> PrinterConfig {
+        PrinterConfig {
+            ip: "127.0.0.1".into(),
+            paper_width: 80,
+            shop_name: "Granny's".into(),
+            shop_phone: "02-000-0000".into(),
+            shop_line: "@grannys".into(),
+            qr_text: "Scan to Pay".into(),
+            qr_code_type: "phone".into(),
+            qr_code_value: "0898350889".into(),
+            thank_you_message: "ขอบคุณค่ะ".into(),
+        }
+    }
+
+    fn receipt(delivery_fee: f64, open_amount: bool) -> ReceiptData {
+        ReceiptData {
+            customer_name: "คุณเอ".into(),
+            items: vec![ReceiptItem {
+                name: "เค้กแครอท".into(),
+                quantity: 2.0,
+                price: 150.0,
+            }],
+            discount_type: "fixed".into(),
+            discount: 50.0,
+            delivery_fee,
+            open_amount,
+        }
+    }
+
+    /// The receipt total for `receipt()`: 2 × 150 − 50 + fee.
+    fn total(delivery_fee: f64) -> f64 {
+        250.0 + delivery_fee
+    }
+
+    fn contains(haystack: &[u8], needle: &[u8]) -> bool {
+        haystack.windows(needle.len()).any(|w| w == needle)
+    }
+
+    /// The rasterized bytes the shipping note produces when it prints.
+    fn note_raster() -> Vec<u8> {
+        thai::render_text_line(
+            SHIPPING_NOT_INCLUDED_NOTE,
+            FONT_SIZE_80MM * 0.8,
+            paper_width_px(80),
+            Alignment::Left,
+        )
+    }
+
+    /// The rasterized bytes of the QR caption — also the marker separating the
+    /// figures half of the receipt from the QR half.
+    fn caption_raster() -> Vec<u8> {
+        thai::render_text_line(
+            "Scan to Pay",
+            FONT_SIZE_80MM,
+            paper_width_px(80),
+            Alignment::Center,
+        )
+    }
+
+    /// The payload a closed-amount QR carries for `receipt(delivery_fee, _)`.
+    fn closed_payload(delivery_fee: f64) -> String {
+        promptpay::generate_promptpay_qr(
+            AccountType::Phone,
+            "0898350889",
+            total(delivery_fee),
+            false,
+        )
+    }
+
+    #[test]
+    fn closed_amount_qr_carries_the_total_and_the_one_time_marker() {
+        let bytes = build_receipt(&receipt(0.0, false), &config()).unwrap();
+        assert!(contains(&bytes, closed_payload(0.0).as_bytes()));
+    }
+
+    #[test]
+    fn open_amount_qr_omits_the_amount_and_is_reusable() {
+        let bytes = build_receipt(&receipt(0.0, true), &config()).unwrap();
+        let expected =
+            promptpay::generate_promptpay_qr(AccountType::Phone, "0898350889", 0.0, true);
+        assert!(contains(&bytes, expected.as_bytes()));
+
+        // And the closed-amount payload is gone.
+        assert!(!contains(&bytes, closed_payload(0.0).as_bytes()));
+    }
+
+    /// Everything above the QR — item lines, discount, delivery fee, the bold
+    /// "Amount due" — must be byte-identical whichever way the flag is set.
+    #[test]
+    fn open_amount_leaves_the_printed_figures_untouched() {
+        let closed = build_receipt(&receipt(80.0, false), &config()).unwrap();
+        let open = build_receipt(&receipt(80.0, true), &config()).unwrap();
+
+        let qr_caption = caption_raster();
+        let split = |b: &[u8]| {
+            b.windows(qr_caption.len())
+                .position(|w| w == qr_caption.as_slice())
+                .expect("QR caption present")
+        };
+        assert_eq!(closed[..split(&closed)], open[..split(&open)]);
+    }
+
+    #[test]
+    fn qr_caption_is_unchanged_by_the_flag() {
+        let caption = caption_raster();
+        for open_amount in [false, true] {
+            let bytes = build_receipt(&receipt(0.0, open_amount), &config()).unwrap();
+            assert!(contains(&bytes, &caption));
+        }
+    }
+
+    #[test]
+    fn open_amount_with_no_delivery_fee_prints_the_shipping_note() {
+        let bytes = build_receipt(&receipt(0.0, true), &config()).unwrap();
+        assert!(contains(&bytes, &note_raster()));
+    }
+
+    #[test]
+    fn open_amount_with_a_delivery_fee_suppresses_the_shipping_note() {
+        let bytes = build_receipt(&receipt(80.0, true), &config()).unwrap();
+        assert!(!contains(&bytes, &note_raster()));
+    }
+
+    #[test]
+    fn closed_amount_never_prints_the_shipping_note() {
+        for fee in [0.0, 80.0] {
+            let bytes = build_receipt(&receipt(fee, false), &config()).unwrap();
+            assert!(!contains(&bytes, &note_raster()));
+        }
+    }
+}
