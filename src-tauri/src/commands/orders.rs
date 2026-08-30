@@ -89,7 +89,9 @@ pub async fn print_order(
     let receipt = ReceiptData {
         customer_name: cust_name,
         items: receipt_items,
-        discount_type: "none".into(),
+        // Stored orders keep discount as a baht amount (order.discount is
+        // subtracted straight off the subtotal), never a percentage.
+        discount_type: "fixed".into(),
         discount: order.discount as f64,
         delivery_fee: order.delivery_fee as f64,
         // Resolved here rather than passed in, so this command can't be handed a
