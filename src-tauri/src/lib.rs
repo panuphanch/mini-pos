@@ -44,6 +44,7 @@ pub fn run() {
             commands::orders::get_order,
             commands::orders::print_order,
             commands::orders::update_order,
+            commands::orders::set_order_open_amount,
             commands::orders::delete_order,
             commands::orders::merge_orders,
         ])

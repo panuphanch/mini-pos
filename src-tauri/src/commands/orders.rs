@@ -92,9 +92,12 @@ pub async fn print_order(
         discount_type: "none".into(),
         discount: order.discount as f64,
         delivery_fee: order.delivery_fee as f64,
-        // Synced orders always print a closed-amount QR for now; ส่งเย็น
-        // auto-detection is a follow-up.
-        open_amount: false,
+        // Resolved here rather than passed in, so this command can't be handed a
+        // value the operator has since changed on the Orders page.
+        open_amount: orders::resolve_open_amount(
+            order.open_amount_override,
+            order.notes.as_deref(),
+        ),
     };
     let printer = PrinterConfig::from(&config);
     let bytes = build_receipt(&receipt, &printer)
@@ -103,6 +106,18 @@ pub async fn print_order(
         .map_err(|e| format!("Print: {}", e))?;
     orders::mark_printed(&state.db, &id).await.map_err(|e| e.to_string())?;
     Ok("Printed".into())
+}
+
+/// Record the operator's open-amount decision for one order. Always writes an
+/// explicit value — see [`orders::set_open_amount_override`].
+#[tauri::command]
+pub async fn set_order_open_amount(
+    state: State<'_, AppState>,
+    id: String,
+    open_amount: bool,
+) -> Result<(), String> {
+    orders::set_open_amount_override(&state.db, &id, open_amount)
+        .await.map_err(|e| e.to_string())
 }
 
 #[tauri::command]

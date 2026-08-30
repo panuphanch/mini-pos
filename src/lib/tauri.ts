@@ -57,6 +57,8 @@ export const ordersApi = {
     invoke<string>('print_order', { id }),
   update: (id: string, payload: OrderEditPayload) =>
     invoke<void>('update_order', { id, payload }),
+  setOpenAmount: (id: string, openAmount: boolean) =>
+    invoke<void>('set_order_open_amount', { id, openAmount }),
   delete: (id: string) => invoke<void>('delete_order', { id }),
   merge: (orderIds: string[]) =>
     invoke<MergeResult>('merge_orders', { orderIds }),
