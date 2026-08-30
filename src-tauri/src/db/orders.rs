@@ -341,18 +341,24 @@ pub struct OrderDetail {
 /// only renders the boolean this module resolves.
 const COLD_DELIVERY_KEYWORD: &str = "ส่งเย็น";
 
-/// Whether an order prints an open-amount (no figure) PromptPay QR.
-///
-/// The operator's override wins when there is one — `Some(0)` forces a
-/// fixed-amount QR, `Some(1)` forces an open one — and sync never writes it, so
-/// editing the sheet can't undo a decision the operator made. With no override
-/// (`None`) the order follows its note, which is what makes correcting a note in
-/// the sheet and re-syncing change the behaviour. The note match is a plain
-/// substring so real notes like "ส่งเย็น 10 โมง" still count.
-pub fn resolve_open_amount(override_flag: Option<i64>, notes: Option<&str>) -> bool {
-    match override_flag {
-        Some(flag) => flag != 0,
-        None => notes.is_some_and(|n| n.contains(COLD_DELIVERY_KEYWORD)),
+impl OrderRow {
+    /// Whether this order prints an open-amount (no figure) PromptPay QR.
+    ///
+    /// The operator's override wins when there is one — `Some(0)` forces a
+    /// fixed-amount QR, `Some(1)` forces an open one — and sync never writes it,
+    /// so editing the sheet can't undo a decision the operator made. With no
+    /// override (`None`) the order follows its note, which is what makes
+    /// correcting a note in the sheet and re-syncing change the behaviour. The
+    /// note match is a plain substring so real notes like "ส่งเย็น 10 โมง"
+    /// still count.
+    pub fn open_amount(&self) -> bool {
+        match self.open_amount_override {
+            Some(flag) => flag != 0,
+            None => self
+                .notes
+                .as_deref()
+                .is_some_and(|n| n.contains(COLD_DELIVERY_KEYWORD)),
+        }
     }
 }
 
@@ -424,7 +430,7 @@ pub async fn list_view(
         let items_summary = items_summary(pool, &r.id).await?;
         let (merged_from_count, merged_into_order_number) =
             merge_info(pool, &r.id, r.merged_into_id.as_deref()).await?;
-        let open_amount = resolve_open_amount(r.open_amount_override, r.notes.as_deref());
+        let open_amount = r.open_amount();
         out.push(OrderListRow {
             id: r.id,
             order_number: r.order_number,
@@ -474,7 +480,7 @@ pub async fn get_view(pool: &SqlitePool, id: &str) -> Result<Option<OrderDetail>
     }
     let (merged_from_count, merged_into_order_number) =
         merge_info(pool, &r.id, r.merged_into_id.as_deref()).await?;
-    let open_amount = resolve_open_amount(r.open_amount_override, r.notes.as_deref());
+    let open_amount = r.open_amount();
     Ok(Some(OrderDetail {
         id: r.id,
         order_number: r.order_number,
@@ -551,7 +557,7 @@ pub async fn set_open_amount_override(
     id: &str,
     open_amount: bool,
 ) -> Result<(), sqlx::Error> {
-    sqlx::query(
+    let res = sqlx::query(
         r#"UPDATE "order" SET open_amount_override = ?, updated_at = ? WHERE id = ?"#,
     )
     .bind(if open_amount { 1 } else { 0 })
@@ -559,6 +565,11 @@ pub async fn set_open_amount_override(
     .bind(id)
     .execute(pool)
     .await?;
+    // An unknown id must not report success: the toggle would stay where the
+    // operator put it until the next refresh silently moved it back.
+    if res.rows_affected() == 0 {
+        return Err(sqlx::Error::RowNotFound);
+    }
     Ok(())
 }
 
@@ -1508,6 +1519,15 @@ mod tests {
         let row = sqlx::query_as::<_, OrderRow>(r#"SELECT * FROM "order" WHERE id = ?"#)
             .bind(&id).fetch_one(&pool).await.unwrap();
         assert_eq!(row.open_amount_override, Some(1), "does not fall back to NULL");
+    }
+
+    #[tokio::test]
+    async fn setting_the_override_on_an_unknown_order_is_an_error() {
+        let pool = init_memory_pool().await.unwrap();
+        // Silently succeeding would leave the Switch showing a state nothing
+        // was written for, until the next refresh moved it back.
+        let err = set_open_amount_override(&pool, "no-such-order", true).await;
+        assert!(matches!(err, Err(sqlx::Error::RowNotFound)));
     }
 
     #[tokio::test]
