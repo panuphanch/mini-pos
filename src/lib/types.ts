@@ -55,6 +55,8 @@ export interface OrderListRow {
   mergedIntoId: string | null;
   mergedIntoOrderNumber: string | null;
   mergedFromCount: number;
+  /** Resolved backend-side: operator override if set, else the note's ส่งเย็น. */
+  openAmount: boolean;
 }
 
 export interface OrderDetailItem {
@@ -86,6 +88,8 @@ export interface OrderDetail {
   mergedIntoId: string | null;
   mergedIntoOrderNumber: string | null;
   mergedFromCount: number;
+  /** Resolved backend-side: operator override if set, else the note's ส่งเย็น. */
+  openAmount: boolean;
 }
 
 export interface MergeResult {

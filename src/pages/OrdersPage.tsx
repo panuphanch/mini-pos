@@ -14,6 +14,7 @@ import { ordersApi } from '../lib/tauri';
 import type { OrderDetail, OrderListRow } from '../lib/types';
 import { Button } from '../components/ui/button';
 import { Checkbox } from '../components/ui/checkbox';
+import { Switch } from '../components/ui/switch';
 import { Label } from '../components/ui/label';
 import { Badge } from '../components/ui/badge';
 import EditOrderDialog from '../components/EditOrderDialog';
@@ -155,6 +156,27 @@ export default function OrdersPage() {
     }
   };
 
+  // Optimistic: the Switch is the operator's read of the state, so it should
+  // move under the finger. A failed write rolls the row back and surfaces why.
+  const handleOpenAmount = async (row: OrderListRow, next: boolean) => {
+    const patch = (value: boolean) =>
+      setOrders((prev) =>
+        prev.map((o) => (o.id === row.id ? { ...o, openAmount: value } : o)),
+      );
+    patch(next);
+    try {
+      await ordersApi.setOpenAmount(row.id, next);
+      setDetails((prev) => {
+        const copy = { ...prev };
+        delete copy[row.id];
+        return copy;
+      });
+    } catch (e) {
+      patch(!next);
+      setError(e instanceof Error ? e.message : String(e));
+    }
+  };
+
   const afterEditSaved = async () => {
     setDetails({});
     await fetchOrders();
@@ -246,6 +268,9 @@ export default function OrdersPage() {
                 <th className="px-3 py-3 font-medium">Items / Delivery</th>
                 <th className="px-3 py-3 font-medium text-right">Total</th>
                 <th className="px-3 py-3 font-medium">Note</th>
+                <th className="w-28 px-3 py-3 font-medium text-center normal-case">
+                  QR ไม่ระบุยอด
+                </th>
                 <th className="w-20 px-2 py-3 font-medium"></th>
                 <th className="w-32 px-3 py-3 font-medium text-right"></th>
               </tr>
@@ -266,6 +291,7 @@ export default function OrdersPage() {
                   onEdit={() => handleEdit(o)}
                   onDelete={() => setDeletingTarget(o)}
                   onSelect={() => toggleSelect(o.id)}
+                  onOpenAmountChange={(next) => handleOpenAmount(o, next)}
                 />
               ))}
             </tbody>
@@ -375,6 +401,7 @@ interface OrderRowProps {
   onEdit: () => void;
   onDelete: () => void;
   onSelect: () => void;
+  onOpenAmountChange: (next: boolean) => void;
 }
 
 function OrderRow({
@@ -390,6 +417,7 @@ function OrderRow({
   onEdit,
   onDelete,
   onSelect,
+  onOpenAmountChange,
 }: OrderRowProps) {
   const stopAndPrint = (e: React.MouseEvent) => {
     e.stopPropagation();
@@ -467,6 +495,15 @@ function OrderRow({
           ฿{row.totalAmount}
         </td>
         <td className="px-3 py-3 text-sm text-muted-foreground">{row.notes ?? ''}</td>
+        <td className="w-28 px-3 py-3 text-center" onClick={(e) => e.stopPropagation()}>
+          {!removed && (
+            <Switch
+              checked={row.openAmount}
+              onCheckedChange={onOpenAmountChange}
+              aria-label={`QR ไม่ระบุยอด for order ${row.orderNumber}`}
+            />
+          )}
+        </td>
         <td className="w-20 px-2 py-3 text-center">
           {!removed && (
             <div className="flex items-center justify-center gap-1">
@@ -515,7 +552,7 @@ function OrderRow({
       {isExpanded && !removed && (
         <tr className="bg-accent/20">
           <td></td>
-          <td colSpan={9} className="px-3 py-4">
+          <td colSpan={10} className="px-3 py-4">
             {detail ? (
               <DetailPanel detail={detail} />
             ) : (

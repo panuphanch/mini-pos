@@ -24,6 +24,7 @@ pub struct OrderRow {
     pub deleted_at: Option<String>,
     pub sync_locked: i64,
     pub merged_into_id: Option<String>,
+    pub open_amount_override: Option<i64>,
     pub created_at: String,
     pub updated_at: String,
 }
@@ -296,6 +297,7 @@ pub struct OrderListRow {
     pub merged_into_id: Option<String>,
     pub merged_into_order_number: Option<String>,
     pub merged_from_count: i64,
+    pub open_amount: bool,
 }
 
 #[derive(Debug, Serialize)]
@@ -330,7 +332,28 @@ pub struct OrderDetail {
     pub merged_into_id: Option<String>,
     pub merged_into_order_number: Option<String>,
     pub merged_from_count: i64,
+    pub open_amount: bool,
     pub items: Vec<OrderDetailItem>,
+}
+
+/// Cold deliveries are marked in the weekly sheet's free-text note with this
+/// word. It lives here and nowhere else: the frontend never matches on it, it
+/// only renders the boolean this module resolves.
+const COLD_DELIVERY_KEYWORD: &str = "ส่งเย็น";
+
+/// Whether an order prints an open-amount (no figure) PromptPay QR.
+///
+/// The operator's override wins when there is one — `Some(0)` forces a
+/// fixed-amount QR, `Some(1)` forces an open one — and sync never writes it, so
+/// editing the sheet can't undo a decision the operator made. With no override
+/// (`None`) the order follows its note, which is what makes correcting a note in
+/// the sheet and re-syncing change the behaviour. The note match is a plain
+/// substring so real notes like "ส่งเย็น 10 โมง" still count.
+pub fn resolve_open_amount(override_flag: Option<i64>, notes: Option<&str>) -> bool {
+    match override_flag {
+        Some(flag) => flag != 0,
+        None => notes.is_some_and(|n| n.contains(COLD_DELIVERY_KEYWORD)),
+    }
 }
 
 /// Resolve an order's merge relationships: how many donor rows point at it, and
@@ -401,6 +424,7 @@ pub async fn list_view(
         let items_summary = items_summary(pool, &r.id).await?;
         let (merged_from_count, merged_into_order_number) =
             merge_info(pool, &r.id, r.merged_into_id.as_deref()).await?;
+        let open_amount = resolve_open_amount(r.open_amount_override, r.notes.as_deref());
         out.push(OrderListRow {
             id: r.id,
             order_number: r.order_number,
@@ -420,6 +444,7 @@ pub async fn list_view(
             merged_into_id: r.merged_into_id,
             merged_into_order_number,
             merged_from_count,
+            open_amount,
         });
     }
     Ok(out)
@@ -449,6 +474,7 @@ pub async fn get_view(pool: &SqlitePool, id: &str) -> Result<Option<OrderDetail>
     }
     let (merged_from_count, merged_into_order_number) =
         merge_info(pool, &r.id, r.merged_into_id.as_deref()).await?;
+    let open_amount = resolve_open_amount(r.open_amount_override, r.notes.as_deref());
     Ok(Some(OrderDetail {
         id: r.id,
         order_number: r.order_number,
@@ -470,6 +496,7 @@ pub async fn get_view(pool: &SqlitePool, id: &str) -> Result<Option<OrderDetail>
         merged_into_id: r.merged_into_id,
         merged_into_order_number,
         merged_from_count,
+        open_amount,
         items: detail_items,
     }))
 }
@@ -510,6 +537,28 @@ pub async fn apply_order_edit(
         .execute(&mut *tx).await?;
     }
     tx.commit().await?;
+    Ok(())
+}
+
+/// Record the operator's open-amount decision for an order.
+///
+/// Always writes an explicit `0`/`1`, never back to `NULL`: once the operator
+/// has touched the toggle the order stops following its note, even if the value
+/// they land on happens to agree with it. Sync leaves this column alone, so the
+/// decision survives a re-sync of an edited sheet.
+pub async fn set_open_amount_override(
+    pool: &SqlitePool,
+    id: &str,
+    open_amount: bool,
+) -> Result<(), sqlx::Error> {
+    sqlx::query(
+        r#"UPDATE "order" SET open_amount_override = ?, updated_at = ? WHERE id = ?"#,
+    )
+    .bind(if open_amount { 1 } else { 0 })
+    .bind(now_iso())
+    .bind(id)
+    .execute(pool)
+    .await?;
     Ok(())
 }
 
@@ -1369,6 +1418,96 @@ mod tests {
         let n = soft_delete_missing_rows(&mut tx, "Order_30", &[4]).await.unwrap();
         tx.commit().await.unwrap();
         assert_eq!(n, 0);
+    }
+
+    /// Insert one synced order carrying `notes`, and return its id.
+    async fn seed_order_with_note(
+        pool: &SqlitePool,
+        customer_id: &str,
+        product_id: &str,
+        source_row: i64,
+        notes: Option<&str>,
+    ) -> String {
+        let mut tx = pool.begin().await.unwrap();
+        let out = upsert_from_source(&mut tx, UpsertOrderInput {
+            customer_id, channel: None, delivery_location: None, notes,
+            total_amount: 85, order_date: "2026-05-11",
+            source_tab: "Order_30", source_row,
+            items: vec![UpsertOrderItemInput { product_id, quantity: 1, unit_price: 85 }],
+        }).await.unwrap();
+        tx.commit().await.unwrap();
+        out.order_id
+    }
+
+    #[tokio::test]
+    async fn untouched_orders_follow_their_note() {
+        let pool = init_memory_pool().await.unwrap();
+        let (p, c) = seed_pc(&pool).await;
+        // Real notes carry times and polite particles, so the keyword has to
+        // match as a substring, not as the whole note.
+        let cold = seed_order_with_note(&pool, &c.id, &p.id, 4, Some("ส่งเย็น")).await;
+        let cold_with_time = seed_order_with_note(&pool, &c.id, &p.id, 5, Some("ส่งเย็น 10 โมง")).await;
+        let unrelated = seed_order_with_note(&pool, &c.id, &p.id, 6, Some("รับเอง")).await;
+        let no_note = seed_order_with_note(&pool, &c.id, &p.id, 7, None).await;
+
+        let list = list_view(&pool, Some("Order_30"), false, 100).await.unwrap();
+        let flag = |id: &str| list.iter().find(|r| r.id == id).unwrap().open_amount;
+        assert!(flag(&cold), "a ส่งเย็น note prints an open-amount QR");
+        assert!(flag(&cold_with_time), "surrounding text does not break the match");
+        assert!(!flag(&unrelated), "an unrelated note prints the amount");
+        assert!(!flag(&no_note), "a missing note prints the amount");
+
+        // The detail view resolves the same way as the list.
+        assert!(get_view(&pool, &cold).await.unwrap().unwrap().open_amount);
+        assert!(!get_view(&pool, &no_note).await.unwrap().unwrap().open_amount);
+    }
+
+    #[tokio::test]
+    async fn an_override_beats_the_note_in_both_directions() {
+        let pool = init_memory_pool().await.unwrap();
+        let (p, c) = seed_pc(&pool).await;
+        // Shipping turned out to be known despite the note.
+        let cold = seed_order_with_note(&pool, &c.id, &p.id, 4, Some("ส่งเย็น 10 โมง")).await;
+        set_open_amount_override(&pool, &cold, false).await.unwrap();
+        // A cold delivery arranged verbally, never written in the sheet.
+        let unrelated = seed_order_with_note(&pool, &c.id, &p.id, 5, Some("รับเอง")).await;
+        set_open_amount_override(&pool, &unrelated, true).await.unwrap();
+
+        let list = list_view(&pool, Some("Order_30"), false, 100).await.unwrap();
+        let flag = |id: &str| list.iter().find(|r| r.id == id).unwrap().open_amount;
+        assert!(!flag(&cold), "an explicit off beats a ส่งเย็น note");
+        assert!(flag(&unrelated), "an explicit on beats an unrelated note");
+        assert!(!get_view(&pool, &cold).await.unwrap().unwrap().open_amount);
+        assert!(get_view(&pool, &unrelated).await.unwrap().unwrap().open_amount);
+    }
+
+    #[tokio::test]
+    async fn a_resync_that_rewrites_the_note_leaves_an_override_intact() {
+        let pool = init_memory_pool().await.unwrap();
+        let (p, c) = seed_pc(&pool).await;
+        let id = seed_order_with_note(&pool, &c.id, &p.id, 4, Some("ส่งเย็น")).await;
+        set_open_amount_override(&pool, &id, false).await.unwrap();
+
+        // The sheet is corrected and the week re-synced: same tab and row, new
+        // note. The operator's decision must not be undone.
+        seed_order_with_note(&pool, &c.id, &p.id, 4, Some("ส่งเย็น 10 โมง")).await;
+
+        let detail = get_view(&pool, &id).await.unwrap().unwrap();
+        assert_eq!(detail.notes.as_deref(), Some("ส่งเย็น 10 โมง"), "sync did refresh the note");
+        assert!(!detail.open_amount, "but the override still wins");
+    }
+
+    #[tokio::test]
+    async fn flipping_back_to_agree_with_the_note_still_writes_an_explicit_value() {
+        let pool = init_memory_pool().await.unwrap();
+        let (p, c) = seed_pc(&pool).await;
+        let id = seed_order_with_note(&pool, &c.id, &p.id, 4, Some("ส่งเย็น")).await;
+        set_open_amount_override(&pool, &id, false).await.unwrap();
+        set_open_amount_override(&pool, &id, true).await.unwrap();
+
+        let row = sqlx::query_as::<_, OrderRow>(r#"SELECT * FROM "order" WHERE id = ?"#)
+            .bind(&id).fetch_one(&pool).await.unwrap();
+        assert_eq!(row.open_amount_override, Some(1), "does not fall back to NULL");
     }
 
     #[tokio::test]

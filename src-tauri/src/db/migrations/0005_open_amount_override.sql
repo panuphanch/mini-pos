@@ -1,0 +1,15 @@
+-- Cold deliveries (ส่งเย็น) print a PromptPay QR with no amount, because the
+-- shipping cost isn't known when the receipt is printed.
+--
+-- Which orders those are is normally read off the weekly sheet's free-text
+-- note, but notes are hand-typed and aren't always right, so the operator can
+-- override an order from the Orders page. The override is tri-state:
+--
+--   NULL  follow the note
+--   0     force a fixed-amount QR
+--   1     force an open-amount QR
+--
+-- Sync never writes this column: an operator's decision must survive re-syncing
+-- an edited sheet. An order the operator never touched stays NULL and keeps
+-- following its note, so fixing a note in the sheet does change its behaviour.
+ALTER TABLE "order" ADD COLUMN open_amount_override INTEGER;
