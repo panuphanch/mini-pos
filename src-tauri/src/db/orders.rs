@@ -714,6 +714,9 @@ pub async fn merge_orders(
 
     let mut tx = pool.begin().await?;
 
+    // Only the donors' items move. A donor's own `notes` and `open_amount_override`
+    // are dropped, so a cold-delivery donor merged into a plain master loses that
+    // state and prints a fixed-amount QR — see issue #27.
     // Move each donor's items onto the master, tagged with the donor's source_row.
     let mut summed_discount = master.discount;
     let mut summed_delivery = master.delivery_fee;
