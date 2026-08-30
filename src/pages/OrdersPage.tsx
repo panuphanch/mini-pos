@@ -165,11 +165,14 @@ export default function OrdersPage() {
       setOrders((prev) =>
         prev.map((o) => (o.id === row.id ? { ...o, openAmount: next } : o)),
       );
-      setDetails((prev) => {
-        const copy = { ...prev };
-        delete copy[row.id];
-        return copy;
-      });
+      // Patched in place rather than evicted: the detail is only ever fetched when
+      // a row is expanded, so dropping the entry under an already-open row would
+      // leave it on "Loading detail…" until the operator collapsed it.
+      setDetails((prev) =>
+        prev[row.id]
+          ? { ...prev, [row.id]: { ...prev[row.id], openAmount: next } }
+          : prev,
+      );
     } catch (e) {
       setError(e instanceof Error ? e.message : String(e));
     }
