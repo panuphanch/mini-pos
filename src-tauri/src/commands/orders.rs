@@ -94,10 +94,7 @@ pub async fn print_order(
         delivery_fee: order.delivery_fee as f64,
         // Resolved here rather than passed in, so this command can't be handed a
         // value the operator has since changed on the Orders page.
-        open_amount: orders::resolve_open_amount(
-            order.open_amount_override,
-            order.notes.as_deref(),
-        ),
+        open_amount: order.open_amount(),
     };
     let printer = PrinterConfig::from(&config);
     let bytes = build_receipt(&receipt, &printer)

@@ -156,23 +156,21 @@ export default function OrdersPage() {
     }
   };
 
-  // Optimistic: the Switch is the operator's read of the state, so it should
-  // move under the finger. A failed write rolls the row back and surfaces why.
+  // The Switch moves only once the write lands, so what it shows is always what
+  // Print will use. The write is a local SQLite update, so there's nothing to
+  // wait on worth an optimistic guess.
   const handleOpenAmount = async (row: OrderListRow, next: boolean) => {
-    const patch = (value: boolean) =>
-      setOrders((prev) =>
-        prev.map((o) => (o.id === row.id ? { ...o, openAmount: value } : o)),
-      );
-    patch(next);
     try {
       await ordersApi.setOpenAmount(row.id, next);
+      setOrders((prev) =>
+        prev.map((o) => (o.id === row.id ? { ...o, openAmount: next } : o)),
+      );
       setDetails((prev) => {
         const copy = { ...prev };
         delete copy[row.id];
         return copy;
       });
     } catch (e) {
-      patch(!next);
       setError(e instanceof Error ? e.message : String(e));
     }
   };
